@@ -1,0 +1,26 @@
+# Foundry
+out/
+cache/
+.foundry/
+
+# Dependencies
+lib/
+
+# Build artifacts
+artifacts/
+build/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+*.log

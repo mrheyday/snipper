@@ -1,0 +1,90 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.36;
+
+import {Test, console} from "forge-std/Test.sol";
+import {DelegatedExecutor} from "../src/DelegatedExecutor.sol";
+import {ERC20Mock} from "./mocks/ERC20Mock.sol";
+
+contract DelegatedExecutorTest is Test {
+    DelegatedExecutor public executor;
+    ERC20Mock public tokenA;
+    ERC20Mock public tokenB;
+    address public user;
+
+    error DeadlineExceeded();
+    error SwapFailed();
+
+    event Swap(address indexed tokenIn, address indexed tokenOut, uint256 amountIn, uint256 amountOut);
+
+    function setUp() public {
+        executor = new DelegatedExecutor();
+        tokenA = new ERC20Mock("Token A", "TKNA", 18);
+        tokenB = new ERC20Mock("Token B", "TKNB", 6);
+
+        user = makeAddr("user");
+        tokenA.mint(user, 1000e18);
+        tokenB.mint(address(this), 10000e6);
+    }
+
+    function test_ExecuteSwap_Success() public {
+        uint256 amountIn = 100e18;
+        bytes memory path = abi.encodePacked(address(tokenA), address(tokenB));
+        uint256 minOut = 100e6;
+        uint256 deadline = block.timestamp + 300;
+
+        tokenA.mint(user, amountIn);
+
+        // Allow EOA to use executor
+        executor.allowEOA(user);
+
+        vm.startPrank(user);
+        tokenA.approve(address(executor), amountIn);
+
+        vm.expectRevert();
+        executor.executeSwap(address(tokenA), amountIn, path, minOut, deadline);
+        vm.stopPrank();
+    }
+
+    function test_RevertWhen_DeadlineExceeded() public {
+        uint256 amountIn = 100e18;
+        bytes memory path = abi.encodePacked(address(tokenA), address(tokenB));
+        uint256 deadline = block.timestamp - 1; // Expired
+
+        tokenA.mint(user, amountIn);
+
+        // Allow EOA to use executor (required for access control)
+        executor.allowEOA(user);
+
+        vm.startPrank(user);
+        tokenA.approve(address(executor), amountIn);
+
+        vm.expectRevert(DeadlineExceeded.selector);
+        executor.executeSwap(address(tokenA), amountIn, path, 0, deadline);
+        vm.stopPrank();
+    }
+
+    function test_Fuzz_DeadlineValidation(uint256 futureTime) public {
+        futureTime = bound(futureTime, block.timestamp + 1, block.timestamp + 10000);
+        uint256 amountIn = 100e18;
+        bytes memory path = abi.encodePacked(address(tokenA), address(tokenB));
+
+        tokenA.mint(user, amountIn);
+
+        // Allow EOA to use executor
+        executor.allowEOA(user);
+
+        vm.startPrank(user);
+        tokenA.approve(address(executor), amountIn);
+
+        vm.expectRevert();
+        executor.executeSwap(address(tokenA), amountIn, path, 0, futureTime);
+        vm.stopPrank();
+    }
+
+    function test_ReceiveETH() public {
+        uint256 amount = 1 ether;
+        (bool success,) = payable(address(executor)).call{value: amount}("");
+        require(success);
+        assertEq(address(executor).balance, amount);
+    }
+}

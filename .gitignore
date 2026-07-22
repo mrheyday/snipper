@@ -1,0 +1,66 @@
+# Environment variables
+.env
+.env.local
+.env.*.local
+.env.production.local
+
+# Dependencies
+node_modules/
+dist/
+build/
+out/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Runtime data
+pids/
+*.pid
+*.seed
+*.pid.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# OS
+Thumbs.db
+
+# Temporary files
+*.tmp
+tmp/
+temp/
+
+# Contract deployments
+broadcast/
+cache/
+
+# Gas reports
+.gas-report
+
+# Coverage reports
+coverage/
+.coverage/
+
+# Foundry
+out/
+cache/
+
+# Node
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Build artifacts
+*.o
+*.a
+*.so

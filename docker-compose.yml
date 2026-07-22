@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  sniper-bot:
+    build: .
+    container_name: arbitrum-sniper-bot
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      WALLET_PRIVATE_KEY: ${WALLET_PRIVATE_KEY}
+      RPC: ${RPC:-https://arb1.arbitrum.io/rpc}
+      CHAIN_ID: ${CHAIN_ID:-42161}
+      SWAP_ROUTER_ADDRESS: ${SWAP_ROUTER_ADDRESS:-0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45}
+      SNIPER_SEARCHER_ADDRESS: ${SNIPER_SEARCHER_ADDRESS}
+      FLASH_LOAN_RECEIVER_ADDRESS: ${FLASH_LOAN_RECEIVER_ADDRESS}
+      DELEGATED_EXECUTOR_ADDRESS: ${DELEGATED_EXECUTOR_ADDRESS}
+      SLIPPAGE_TOLERANCE: ${SLIPPAGE_TOLERANCE:-0.5}
+      DEADLINE_IN_MINUTES: ${DEADLINE_IN_MINUTES:-30}
+      BITQUERY_TOKEN: ${BITQUERY_TOKEN}
+      DEBUG: ${DEBUG:-}
+    logging:
+      driver: 'json-file'
+      options:
+        max-size: '10m'
+        max-file: '3'
+    healthcheck:
+      test: ["CMD", "node", "-e", "console.log('ok')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3

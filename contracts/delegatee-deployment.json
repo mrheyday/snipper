@@ -1,0 +1,40 @@
+{
+  "timestamp": "2026-07-22T16:10:15Z",
+  "network": "anvil-local",
+  "chain_id": 31337,
+  "deployer": "0x00000001386687D89e6A36aE01C5e5F75acF61Af",
+  "contracts": {
+    "SniperSearcher": {
+      "address": "0xb0b962d2bfb4b3a33802A187bbE8A8aB899264e6",
+      "constructor_args": ["0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45"],
+      "description": "Main entry point for MEV sniping, direct swap execution"
+    },
+    "DelegatedExecutor": {
+      "address": "0x1258AcDc63a0A8dc617c69d51470631cd59daC6A",
+      "constructor_args": [],
+      "description": "EIP-7702 delegatee contract, receives delegated calls from EOA",
+      "role": "EIP-7702 delegatee for atomic swaps"
+    },
+    "FlashLoanReceiver": {
+      "address": "0x36108ff595cB9C62B0CddC4B708f57fcbc033114",
+      "constructor_args": [
+        "0xb0b962d2bfb4b3a33802A187bbE8A8aB899264e6",
+        "0xB9C5a95a8f8D7ad8E64d64eF53e6aBaA40a5bF18"
+      ],
+      "description": "Flash loan receiver, initiates Aave V3 flash loans"
+    }
+  },
+  "configuration": {
+    "SwapRouter": "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45",
+    "AavePool": "0xB9C5a95a8f8D7ad8E64d64eF53e6aBaA40a5bF18"
+  },
+  "gas_used": 2912866,
+  "gas_cost": "0.005825732002912866 ETH",
+  "execution_modes": {
+    "direct": "EOA -> SniperSearcher.executeSwap()",
+    "flash_loan": "EOA -> FlashLoanReceiver.initiateFlashLoan() -> Aave callback",
+    "eip7702": "EOA -> DelegatedExecutor (delegated call) -> SwapRouter",
+    "erc4337": "SmartWallet -> UserOp -> EntryPoint"
+  },
+  "status": "DEPLOYED_AND_REGISTERED"
+}
