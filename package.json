@@ -13,6 +13,7 @@
     "test": "cd contracts && forge test"
   },
   "dependencies": {
+    "@aave/contract-helpers": "^1.38.0",
     "@openzeppelin/contracts": "^5.6.1",
     "@uniswap/sdk-core": "^5.9.0",
     "@uniswap/smart-order-router": "^3.59.0",

@@ -63,9 +63,11 @@ export const UNISWAP_V3_ROUTER_ABI = [
   'function multicall(uint256 deadline, bytes[] data) external payable returns (bytes[] results)',
 ];
 
+// QuoterV2: richer return data (sqrtPriceX96After, initializedTicksCrossed, gasEstimate)
+// vs V1's single uint256. Struct-based params, not positional.
 export const UNISWAP_V3_QUOTER_ABI = [
-  'function quoteExactInputSingle(address tokenIn, address tokenOut, uint24 fee, uint256 amountIn, uint160 sqrtPriceLimitX96) external returns (uint256 amountOut)',
-  'function quoteExactInput(bytes memory path, uint256 amountIn) external returns (uint256 amountOut)',
+  'function quoteExactInputSingle(tuple(address tokenIn, address tokenOut, uint256 amountIn, uint24 fee, uint160 sqrtPriceLimitX96) params) external returns (uint256 amountOut, uint160 sqrtPriceX96After, uint32 initializedTicksCrossed, uint256 gasEstimate)',
+  'function quoteExactInput(bytes memory path, uint256 amountIn) external returns (uint256 amountOut, uint160[] memory sqrtPriceX96AfterList, uint32[] memory initializedTicksCrossedList, uint256 gasEstimate)',
 ];
 
 export const ERC20_ABI = [

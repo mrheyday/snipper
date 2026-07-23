@@ -57,7 +57,7 @@ export function encodePath(tokens: string[], fees: number[]): Buffer {
     }
   }
 
-  return Buffer.from(encoded, 'hex');
+  return Buffer.from(encoded.slice(2), 'hex');
 }
 
 /**

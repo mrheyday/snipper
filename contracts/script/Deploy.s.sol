@@ -64,14 +64,20 @@ contract Deploy is Script {
 
         vm.startBroadcast(deployerKey);
 
+        // Dust guard: reject amountIn with bitLength < 50 (~5.6e14 wei floor). Our
+        // configured 0.001 KERN swap amount has bitLength exactly 50, so it still passes
+        // (check is strict <) while genuinely smaller dust gets rejected before any
+        // transferFrom/approve/router call.
+        uint256 minAmountBitLength = 50;
+
         // 1. Deploy SniperSearcher
         console.log("[1] Deploying SniperSearcher...");
-        SniperSearcher sniperSearcher = new SniperSearcher(SWAP_ROUTER);
+        SniperSearcher sniperSearcher = new SniperSearcher(SWAP_ROUTER, minAmountBitLength);
         console.log("    [OK] SniperSearcher deployed to:", address(sniperSearcher));
 
         // 2. Deploy DelegatedExecutor (no dependencies)
         console.log("[2] Deploying DelegatedExecutor...");
-        DelegatedExecutor delegatedExecutor = new DelegatedExecutor();
+        DelegatedExecutor delegatedExecutor = new DelegatedExecutor(minAmountBitLength);
         console.log("    [OK] DelegatedExecutor deployed to:", address(delegatedExecutor));
 
         // 3. Deploy FlashLoanReceiver (depends on SniperSearcher and AavePool)

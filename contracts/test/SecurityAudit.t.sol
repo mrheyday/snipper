@@ -27,9 +27,9 @@ contract AuditTest is Test {
 
         // Deploy contracts
         vm.prank(owner);
-        searcher = new SniperSearcher(address(this));
+        searcher = new SniperSearcher(address(this), 0);
         flashReceiver = new FlashLoanReceiver(address(searcher), address(this));
-        executor = new DelegatedExecutor();
+        executor = new DelegatedExecutor(0);
 
         // Deploy mock tokens
         tokenA = new ERC20Mock("Token A", "TKNA", 18);
@@ -60,7 +60,8 @@ contract AuditTest is Test {
         // ATTACKER CAN CALL THIS WITHOUT onlyOwner CHECK
         vm.prank(attacker);
         vm.expectRevert(); // Will revert due to mock router, but not due to access control
-        executor.executeSwap(address(tokenA), amountIn, path, minOut, deadline);
+        uint256 amountOut = executor.executeSwap(address(tokenA), amountIn, path, minOut, deadline);
+        amountOut; // call is expected to revert; captured only to satisfy the return-value check
 
         // The reverts we see in tests are from SwapFailed (mock router failing),
         // NOT from access control. This is the vulnerability.
@@ -82,7 +83,9 @@ contract AuditTest is Test {
 
         vm.prank(attacker);
         vm.expectRevert(); // Fails due to mock, but callback pattern is exposed
-        executor.executeSwapWithCallback(address(tokenA), amountIn, path, minOut, deadline, maliciousCallback);
+        uint256 amountOut =
+            executor.executeSwapWithCallback(address(tokenA), amountIn, path, minOut, deadline, maliciousCallback);
+        amountOut; // call is expected to revert; captured only to satisfy the return-value check
     }
 
     // ============================================
@@ -108,7 +111,8 @@ contract AuditTest is Test {
         bytes memory params = abi.encode(token, swapPath, minAmountOut, address(this));
 
         vm.expectRevert(); // Will fail due to integration issue
-        flashReceiver.executeOperation(token, amount, 9, address(flashReceiver), params);
+        bool result = flashReceiver.executeOperation(token, amount, 9, address(flashReceiver), params);
+        result; // call is expected to revert; captured only to satisfy the return-value check
     }
 
     // ============================================
@@ -147,7 +151,9 @@ contract AuditTest is Test {
 
         vm.prank(attacker);
         vm.expectRevert(); // Will fail, but shows the dangerous pattern
-        executor.executeSwapWithCallback(address(tokenA), amountIn, path, minOut, deadline, reentranceCallback);
+        uint256 amountOut =
+            executor.executeSwapWithCallback(address(tokenA), amountIn, path, minOut, deadline, reentranceCallback);
+        amountOut; // call is expected to revert; captured only to satisfy the return-value check
     }
 
     // ============================================
@@ -170,6 +176,7 @@ contract AuditTest is Test {
 
         vm.prank(attacker);
         vm.expectRevert(); // Fails on swap, but shows any EOA can call
-        executor.executeBatchSwaps(swaps, block.timestamp + 300);
+        uint256[] memory amountsOut = executor.executeBatchSwaps(swaps, block.timestamp + 300);
+        amountsOut; // call is expected to revert; captured only to satisfy the return-value check
     }
 }

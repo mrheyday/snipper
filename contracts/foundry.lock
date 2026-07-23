@@ -1,0 +1,11 @@
+{
+  "../lib/account-abstraction": {
+    "rev": "b36a1ed52ae00da6f8a4c8d50181e2877e4fa410"
+  },
+  "lib/solady": {
+    "tag": {
+      "name": "v0.1.26",
+      "rev": "acd959aa4bd04720d640bf4e6a5c71037510cc4b"
+    }
+  }
+}

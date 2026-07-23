@@ -29,13 +29,13 @@ const ERC20_ABI = [
   'function balanceOf(address) external view returns(uint256)',
 ];
 
-type TokenWithContract = {
+export type TokenWithContract = {
   contract: Contract;
   walletHas: (signer: Signer, requiredAmount: BigNumberish) => Promise<boolean>;
   token: Token;
 };
 
-const buildERC20TokenWithContract = async (
+export const buildERC20TokenWithContract = async (
   address: string,
   provider: Provider
 ): Promise<TokenWithContract | null> => {
@@ -77,7 +77,7 @@ const buildERC20TokenWithContract = async (
 // Example usage for ARBITRUM
 const provider = new providers.JsonRpcProvider(process.env.RPC);
 
-type Tokens = {
+export type Tokens = {
   Token0: TokenWithContract | null;
   Token1: TokenWithContract | null;
 };
@@ -196,4 +196,118 @@ export const getTokens = async (): Promise<Tokens> => {
     );
     return { Token0: null, Token1: null };
   }
+};
+
+/**
+ * Subscribe to real-time PoolCreated events via Bitquery WebSocket interface.
+ * Fallbacks to HTTP polling if WebSocket connection fails.
+ */
+export const subscribeToTokens = (
+  onTokensDetected: (tokens: Tokens) => void,
+  onError?: (error: Error) => void
+): { unsubscribe: () => void } => {
+  let active = true;
+  let ws: InstanceType<typeof globalThis.WebSocket> | null = null;
+  const token = process.env.BITQUERY_TOKEN;
+
+  if (!token) {
+    logger.warn('No BITQUERY_TOKEN configured; defaulting to HTTP polling for pool detection.');
+    getTokens()
+      .then((t) => active && onTokensDetected(t))
+      .catch((err) => onError && onError(err));
+    return {
+      unsubscribe: () => {
+        active = false;
+      },
+    };
+  }
+
+  try {
+    const WebSocketClient = globalThis.WebSocket;
+    if (!WebSocketClient) {
+      throw new Error('Native WebSocket client unavailable in environment');
+    }
+
+    const wsUrl = `wss://streaming.bitquery.io/graphql?token=${encodeURIComponent(token)}`;
+    ws = new WebSocketClient(wsUrl);
+
+    ws.onopen = () => {
+      logger.info('⚡ Bitquery WebSocket stream connected for sub-second pool detection');
+      const subscriptionPayload = {
+        type: 'start',
+        id: '1',
+        payload: {
+          query: `subscription {
+  EVM(network: arbitrum) {
+    Events(
+      where: {Log: {Signature: {Name: {is: "PoolCreated"}}, SmartContract: {is: "0x1F98431c8aD98523631AE4a59f267346ea31F984"}}}
+    ) {
+      Arguments {
+        Name
+        Value {
+          ... on EVM_ABI_Address_Value_Arg { address }
+        }
+      }
+    }
+  }
+}`,
+        },
+      };
+      ws?.send(JSON.stringify(subscriptionPayload));
+    };
+
+    ws.onmessage = async (event: { data: unknown }) => {
+      if (!active) return;
+      try {
+        const parsed = JSON.parse(String(event.data));
+        const eventData = parsed?.payload?.data?.EVM?.Events?.[0];
+        if (eventData?.Arguments && eventData.Arguments.length >= 2) {
+          const t0 = eventData.Arguments[0]?.Value?.address;
+          const t1 = eventData.Arguments[1]?.Value?.address;
+          if (t0 && t1) {
+            logger.info(`⚡ Real-time PoolCreated WebSocket event: ${t0} ↔ ${t1}`);
+            const [Token0, Token1] = await Promise.all([
+              buildERC20TokenWithContract(t0, provider),
+              buildERC20TokenWithContract(t1, provider),
+            ]);
+            if (Token0 && Token1) {
+              onTokensDetected({ Token0, Token1 });
+            }
+          }
+        }
+      } catch (err) {
+        logger.error(
+          `Error parsing WebSocket event payload: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
+    };
+
+    ws.onerror = () => {
+      logger.warn(`Bitquery WebSocket error encountered. Switching to fallback HTTP query.`);
+      if (onError) onError(new Error('WebSocket error'));
+      getTokens()
+        .then((t) => active && onTokensDetected(t))
+        .catch((err) => onError && onError(err));
+    };
+
+    ws.onclose = () => {
+      logger.info('Bitquery WebSocket stream closed');
+    };
+  } catch (error) {
+    logger.warn(
+      `Failed to initialize WebSocket subscription (${error instanceof Error ? error.message : String(error)}); falling back to HTTP query.`
+    );
+    getTokens()
+      .then((t) => active && onTokensDetected(t))
+      .catch((err) => onError && onError(err));
+  }
+
+  return {
+    unsubscribe: () => {
+      active = false;
+      if (ws && ws.readyState === ws.OPEN) {
+        ws.close();
+      }
+    },
+  };
 };

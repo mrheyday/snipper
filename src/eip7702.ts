@@ -240,8 +240,12 @@ export class EIP7702Executor {
       );
       return gasEstimate;
     } catch (error) {
-      console.warn('Gas estimation failed, using default', error);
-      return BigNumber.from('200000');
+      const reason = error instanceof Error ? error.message : String(error);
+      const err = new Error(
+        `Gas estimation failed (transaction would revert): ${reason}`
+      ) as Error & { cause: unknown };
+      err.cause = error;
+      throw err;
     }
   }
 
@@ -259,8 +263,12 @@ export class EIP7702Executor {
       );
       return gasEstimate;
     } catch (error) {
-      console.warn('Gas estimation failed, using default', error);
-      return BigNumber.from(swaps.length * 200000);
+      const reason = error instanceof Error ? error.message : String(error);
+      const err = new Error(
+        `Gas estimation failed (transaction would revert): ${reason}`
+      ) as Error & { cause: unknown };
+      err.cause = error;
+      throw err;
     }
   }
 

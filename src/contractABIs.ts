@@ -1,7 +1,7 @@
 /**
  * Smart Contract ABIs
  * Auto-generated from Foundry build artifacts
- * Generated on: 2026-07-22
+ * Generated on: 2026-07-23
  * Includes: SniperSearcher, FlashLoanReceiver, DelegatedExecutor, BEBE BasicEOABatchExecutor
  */
 
@@ -13,6 +13,11 @@ export const SNIPER_SEARCHER_ABI = [
         name: '_swapRouter',
         type: 'address',
         internalType: 'address',
+      },
+      {
+        name: '_minAmountBitLength',
+        type: 'uint256',
+        internalType: 'uint256',
       },
     ],
     stateMutability: 'nonpayable',
@@ -188,6 +193,38 @@ export const SNIPER_SEARCHER_ABI = [
       },
     ],
     stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'minAmountBitLength',
+    inputs: [],
+    outputs: [
+      {
+        name: '',
+        type: 'uint256',
+        internalType: 'uint256',
+      },
+    ],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'multicall',
+    inputs: [
+      {
+        name: 'data',
+        type: 'bytes[]',
+        internalType: 'bytes[]',
+      },
+    ],
+    outputs: [
+      {
+        name: '',
+        type: 'bytes[]',
+        internalType: 'bytes[]',
+      },
+    ],
+    stateMutability: 'payable',
   },
   {
     type: 'function',
@@ -390,6 +427,27 @@ export const SNIPER_SEARCHER_ABI = [
   },
   {
     type: 'error',
+    name: 'AmountTooSmall',
+    inputs: [
+      {
+        name: 'amountIn',
+        type: 'uint256',
+        internalType: 'uint256',
+      },
+      {
+        name: 'minBitLength',
+        type: 'uint256',
+        internalType: 'uint256',
+      },
+    ],
+  },
+  {
+    type: 'error',
+    name: 'DeadlineExceeded',
+    inputs: [],
+  },
+  {
+    type: 'error',
     name: 'InsufficientAmountOut',
     inputs: [
       {
@@ -401,17 +459,6 @@ export const SNIPER_SEARCHER_ABI = [
         name: 'minimum',
         type: 'uint256',
         internalType: 'uint256',
-      },
-    ],
-  },
-  {
-    type: 'error',
-    name: 'SafeERC20FailedOperation',
-    inputs: [
-      {
-        name: 'token',
-        type: 'address',
-        internalType: 'address',
       },
     ],
   },
@@ -738,17 +785,6 @@ export const FLASH_LOAN_RECEIVER_ABI = [
   },
   {
     type: 'error',
-    name: 'SafeERC20FailedOperation',
-    inputs: [
-      {
-        name: 'token',
-        type: 'address',
-        internalType: 'address',
-      },
-    ],
-  },
-  {
-    type: 'error',
     name: 'Unauthorized',
     inputs: [],
   },
@@ -757,7 +793,13 @@ export const FLASH_LOAN_RECEIVER_ABI = [
 export const DELEGATED_EXECUTOR_ABI = [
   {
     type: 'constructor',
-    inputs: [],
+    inputs: [
+      {
+        name: '_minAmountBitLength',
+        type: 'uint256',
+        internalType: 'uint256',
+      },
+    ],
     stateMutability: 'nonpayable',
   },
   {
@@ -927,6 +969,38 @@ export const DELEGATED_EXECUTOR_ABI = [
   },
   {
     type: 'function',
+    name: 'minAmountBitLength',
+    inputs: [],
+    outputs: [
+      {
+        name: '',
+        type: 'uint256',
+        internalType: 'uint256',
+      },
+    ],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'multicall',
+    inputs: [
+      {
+        name: 'data',
+        type: 'bytes[]',
+        internalType: 'bytes[]',
+      },
+    ],
+    outputs: [
+      {
+        name: '',
+        type: 'bytes[]',
+        internalType: 'bytes[]',
+      },
+    ],
+    stateMutability: 'payable',
+  },
+  {
+    type: 'function',
     name: 'owner',
     inputs: [],
     outputs: [
@@ -1029,19 +1103,24 @@ export const DELEGATED_EXECUTOR_ABI = [
   },
   {
     type: 'error',
-    name: 'DeadlineExceeded',
-    inputs: [],
+    name: 'AmountTooSmall',
+    inputs: [
+      {
+        name: 'amountIn',
+        type: 'uint256',
+        internalType: 'uint256',
+      },
+      {
+        name: 'minBitLength',
+        type: 'uint256',
+        internalType: 'uint256',
+      },
+    ],
   },
   {
     type: 'error',
-    name: 'SafeERC20FailedOperation',
-    inputs: [
-      {
-        name: 'token',
-        type: 'address',
-        internalType: 'address',
-      },
-    ],
+    name: 'DeadlineExceeded',
+    inputs: [],
   },
   {
     type: 'error',
@@ -1052,7 +1131,29 @@ export const DELEGATED_EXECUTOR_ABI = [
 
 export const BEBE_BASIC_EOA_BATCH_EXECUTOR_ABI = [
   {
+    type: 'fallback',
+    stateMutability: 'payable',
+  },
+  {
     type: 'receive',
+    stateMutability: 'payable',
+  },
+  {
+    type: 'function',
+    name: 'execute',
+    inputs: [
+      {
+        name: 'mode',
+        type: 'bytes32',
+        internalType: 'bytes32',
+      },
+      {
+        name: 'executionData',
+        type: 'bytes',
+        internalType: 'bytes',
+      },
+    ],
+    outputs: [],
     stateMutability: 'payable',
   },
   {
@@ -1078,6 +1179,40 @@ export const BEBE_BASIC_EOA_BATCH_EXECUTOR_ABI = [
       },
     ],
     stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'supportsExecutionMode',
+    inputs: [
+      {
+        name: 'mode',
+        type: 'bytes32',
+        internalType: 'bytes32',
+      },
+    ],
+    outputs: [
+      {
+        name: 'result',
+        type: 'bool',
+        internalType: 'bool',
+      },
+    ],
+    stateMutability: 'view',
+  },
+  {
+    type: 'error',
+    name: 'BatchOfBatchesDecodingError',
+    inputs: [],
+  },
+  {
+    type: 'error',
+    name: 'FnSelectorNotRecognized',
+    inputs: [],
+  },
+  {
+    type: 'error',
+    name: 'UnsupportedExecutionMode',
+    inputs: [],
   },
 ] as const;
 

@@ -17,7 +17,7 @@ contract DelegatedExecutorTest is Test {
     event Swap(address indexed tokenIn, address indexed tokenOut, uint256 amountIn, uint256 amountOut);
 
     function setUp() public {
-        executor = new DelegatedExecutor();
+        executor = new DelegatedExecutor(0);
         tokenA = new ERC20Mock("Token A", "TKNA", 18);
         tokenB = new ERC20Mock("Token B", "TKNB", 6);
 
@@ -38,10 +38,12 @@ contract DelegatedExecutorTest is Test {
         executor.allowEOA(user);
 
         vm.startPrank(user);
-        tokenA.approve(address(executor), amountIn);
+        bool approved = tokenA.approve(address(executor), amountIn);
+        assertTrue(approved);
 
         vm.expectRevert();
-        executor.executeSwap(address(tokenA), amountIn, path, minOut, deadline);
+        uint256 amountOut = executor.executeSwap(address(tokenA), amountIn, path, minOut, deadline);
+        amountOut; // call is expected to revert; captured only to satisfy the return-value check
         vm.stopPrank();
     }
 
@@ -56,10 +58,12 @@ contract DelegatedExecutorTest is Test {
         executor.allowEOA(user);
 
         vm.startPrank(user);
-        tokenA.approve(address(executor), amountIn);
+        bool approved = tokenA.approve(address(executor), amountIn);
+        assertTrue(approved);
 
         vm.expectRevert(DeadlineExceeded.selector);
-        executor.executeSwap(address(tokenA), amountIn, path, 0, deadline);
+        uint256 amountOut = executor.executeSwap(address(tokenA), amountIn, path, 0, deadline);
+        amountOut; // call is expected to revert; captured only to satisfy the return-value check
         vm.stopPrank();
     }
 
@@ -74,10 +78,12 @@ contract DelegatedExecutorTest is Test {
         executor.allowEOA(user);
 
         vm.startPrank(user);
-        tokenA.approve(address(executor), amountIn);
+        bool approved = tokenA.approve(address(executor), amountIn);
+        assertTrue(approved);
 
         vm.expectRevert();
-        executor.executeSwap(address(tokenA), amountIn, path, 0, futureTime);
+        uint256 amountOut = executor.executeSwap(address(tokenA), amountIn, path, 0, futureTime);
+        amountOut; // call is expected to revert; captured only to satisfy the return-value check
         vm.stopPrank();
     }
 

@@ -1,9 +1,18 @@
 import { BigNumber, ethers, Signer, providers } from 'ethers';
+import { UiPoolDataProvider } from '@aave/contract-helpers';
 import { signer, provider } from './config';
-import { FLASH_LOAN_RECEIVER_ABI } from './abis';
+import { FLASH_LOAN_RECEIVER_ABI } from './contractABIs';
 import { Logger } from './logger';
 
 const logger = new Logger('FlashLoanExecutor');
+
+// Aave V3 Arbitrum periphery addresses, verified on-chain and cross-checked against
+// bgd-labs/aave-address-book (AaveV3Arbitrum.sol). POOL_ADDRESSES_PROVIDER matches
+// ADDRESSES_PROVIDER() read directly off the live Aave V3 Pool at
+// 0x794a61358D6845594F94dc1DB02A252b5b4814aD.
+const UI_POOL_DATA_PROVIDER_ADDRESS = '0x91E04cf78e53aEBe609e8a7f2003e7EECD743F2B';
+const POOL_ADDRESSES_PROVIDER_ADDRESS = '0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb';
+const ARBITRUM_CHAIN_ID = 42161;
 
 interface FlashLoanParams {
   token: string;
@@ -38,6 +47,7 @@ interface FlashLoanResult {
 export class FlashLoanExecutor {
   private receiver: ethers.Contract;
   private executorSigner: Signer;
+  private poolDataProvider: UiPoolDataProvider;
 
   constructor(receiverAddress: string, executorSigner?: Signer) {
     this.executorSigner = executorSigner || signer;
@@ -46,6 +56,53 @@ export class FlashLoanExecutor {
       FLASH_LOAN_RECEIVER_ABI,
       this.executorSigner
     );
+    this.poolDataProvider = new UiPoolDataProvider({
+      uiPoolDataProviderAddress: UI_POOL_DATA_PROVIDER_ADDRESS,
+      provider,
+      chainId: ARBITRUM_CHAIN_ID,
+    });
+  }
+
+  /**
+   * Check whether a token is a live, borrowable Aave V3 reserve on Arbitrum.
+   * Flash loans require borrowing to be enabled for the asset; querying this
+   * up front avoids sending a transaction that Aave would reject regardless
+   * of our own contract logic (e.g. reserve not listed, or borrowing paused).
+   */
+  private async checkReserveEligibility(
+    token: string
+  ): Promise<{ eligible: boolean; reason?: string }> {
+    try {
+      const { reservesData } = await this.poolDataProvider.getReservesHumanized({
+        lendingPoolAddressProvider: POOL_ADDRESSES_PROVIDER_ADDRESS,
+      });
+
+      const reserve = reservesData.find(
+        (r) => r.underlyingAsset.toLowerCase() === token.toLowerCase()
+      );
+
+      if (!reserve) {
+        return { eligible: false, reason: 'Not an Aave V3 Arbitrum reserve' };
+      }
+      if (!reserve.isActive) {
+        return { eligible: false, reason: 'Reserve is not active' };
+      }
+      if (reserve.isPaused) {
+        return { eligible: false, reason: 'Reserve is paused' };
+      }
+      if (reserve.isFrozen) {
+        return { eligible: false, reason: 'Reserve is frozen' };
+      }
+      if (!reserve.borrowingEnabled) {
+        return { eligible: false, reason: 'Borrowing disabled for this reserve' };
+      }
+
+      return { eligible: true };
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      logger.warn(`Reserve eligibility check failed, proceeding without it: ${reason}`);
+      return { eligible: true };
+    }
   }
 
   /**
@@ -60,6 +117,17 @@ export class FlashLoanExecutor {
       logger.info(`Borrowing: ${ethers.utils.formatUnits(params.amount, 18)}`);
       logger.info(`Min output: ${ethers.utils.formatUnits(params.minAmountOut, 18)}`);
       logger.info('Fee: 0.09% (Aave V3)');
+
+      // Check reserve eligibility before attempting anything on-chain — cheap,
+      // free (view calls only), and gives a clear reason instead of a bare revert.
+      const eligibility = await this.checkReserveEligibility(params.token);
+      if (!eligibility.eligible) {
+        logger.warn(`Flash loan not possible: ${eligibility.reason}`);
+        return {
+          success: false,
+          error: `Reserve not eligible for flash loan: ${eligibility.reason}`,
+        };
+      }
 
       // Estimate gas
       const gasEstimate = await this.estimateFlashLoanGas(params);
@@ -259,10 +327,12 @@ export class FlashLoanExecutor {
       );
       return gasEstimate;
     } catch (error) {
-      logger.warn(
-        `Gas estimation failed, using default: ${error instanceof Error ? error.message : String(error)}`
-      );
-      return BigNumber.from('500000'); // Conservative default for flash loans
+      const reason = error instanceof Error ? error.message : String(error);
+      const err = new Error(
+        `Gas estimation failed (transaction would revert): ${reason}`
+      ) as Error & { cause: unknown };
+      err.cause = error;
+      throw err;
     }
   }
 

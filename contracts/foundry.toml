@@ -9,7 +9,7 @@ optimizer_runs = 200
 via_ir = true
 
 # Remappings
-remappings = ["solady/=lib/solady/"]
+remappings = ["solady/=lib/solady/src/"]
 
 [profile.default.fuzz]
 runs = 256

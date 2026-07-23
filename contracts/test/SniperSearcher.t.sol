@@ -23,7 +23,7 @@ contract SniperSearcherTest is Test {
 
         // Deploy contracts
         vm.prank(owner);
-        searcher = new SniperSearcher(address(this)); // Use test contract as mock router
+        searcher = new SniperSearcher(address(this), 0); // Use test contract as mock router
 
         // Deploy mock tokens
         tokenA = new ERC20Mock("Token A", "TKNA", 18);
@@ -44,7 +44,8 @@ contract SniperSearcherTest is Test {
 
         vm.prank(user);
         vm.expectRevert(Unauthorized.selector);
-        searcher.executeSwap(address(tokenA), 100e18, path, 0);
+        uint256 amountOut = searcher.executeSwap(address(tokenA), 100e18, path, 0);
+        amountOut; // call is expected to revert; captured only to satisfy the return-value check
     }
 
     function test_Withdraw() public {
@@ -102,5 +103,76 @@ contract SniperSearcherTest is Test {
 
         assertEq(tokenA.balanceOf(address(searcher)), 0);
         assertEq(tokenA.balanceOf(user), 1000e18 + amount);
+    }
+
+    function test_MinAmountBitLength_DisabledByDefault() public {
+        assertEq(searcher.minAmountBitLength(), 0);
+    }
+
+    function test_MinAmountBitLength_RevertsOnDustBeforeAnyExternalCall() public {
+        bytes memory path = abi.encodePacked(address(tokenA), uint24(3000), address(tokenB));
+
+        // minAmountBitLength is immutable; deploy a separate instance with the guard
+        // enabled (e.g. reject anything below ~1.1e15 wei, i.e. bitLength < 50). Deployed
+        // by (and thus owned by) this test contract, so no prank is needed to call it.
+        SniperSearcher guarded = new SniperSearcher(address(this), 50);
+
+        // 1 wei has bitLength 1, well under the 50-bit floor.
+        vm.expectRevert(abi.encodeWithSignature("AmountTooSmall(uint256,uint256)", 1, 50));
+        uint256 amountOut = guarded.executeSwap(address(tokenA), 1, path, 0);
+        amountOut; // call is expected to revert; captured only to satisfy the return-value check
+
+        // No tokens should have moved: the guard fires before safeTransferFrom.
+        // (This test contract was never minted any tokenA in setUp — still 0.)
+        assertEq(tokenA.balanceOf(address(this)), 0);
+    }
+
+    function test_MinAmountBitLength_GasSavedOnRejectedDust() public {
+        bytes memory path = abi.encodePacked(address(tokenA), uint24(3000), address(tokenB));
+
+        SniperSearcher guarded = new SniperSearcher(address(this), 50);
+
+        uint256 gasBefore = gasleft();
+        try guarded.executeSwap(address(tokenA), 1, path, 0) {
+            revert("expected revert");
+        } catch {
+            // expected
+        }
+        uint256 gasUsedOnRejectedDust = gasBefore - gasleft();
+
+        // A real swap attempt (even one that ultimately fails at the router) pays for
+        // approve() + safeTransferFrom() first; the dust guard short-circuits before both.
+        // 50k gas is a generous ceiling for "revert before any external call" on this path.
+        assertLt(gasUsedOnRejectedDust, 50_000);
+    }
+
+    function test_Multicall_BatchesOwnerCallsWithCorrectSender() public {
+        address executorA = makeAddr("executorA");
+        address executorB = makeAddr("executorB");
+
+        bytes[] memory calls = new bytes[](2);
+        calls[0] = abi.encodeCall(SniperSearcher.allowExecutor, (executorA));
+        calls[1] = abi.encodeCall(SniperSearcher.allowExecutor, (executorB));
+
+        // delegatecall inside multicall must preserve msg.sender, so both onlyOwner
+        // checks should see `owner` and succeed.
+        vm.prank(owner);
+        bytes[] memory results = searcher.multicall(calls);
+
+        assertEq(results.length, calls.length);
+        assertTrue(searcher.allowedExecutors(executorA));
+        assertTrue(searcher.allowedExecutors(executorB));
+    }
+
+    function test_Multicall_RevertsForNonOwner() public {
+        bytes[] memory calls = new bytes[](1);
+        calls[0] = abi.encodeCall(SniperSearcher.allowExecutor, (user));
+
+        // msg.sender preserved as `user` through the delegatecall, so the inner
+        // onlyOwner check must still reject it.
+        vm.prank(user);
+        vm.expectRevert(Unauthorized.selector);
+        bytes[] memory results = searcher.multicall(calls);
+        results; // call is expected to revert; captured only to satisfy the return-value check
     }
 }

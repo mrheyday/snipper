@@ -41,6 +41,27 @@ export class SniperExecutor {
       logger.info(`Input: ${ethers.utils.formatUnits(params.amountIn, 18)}`);
       logger.info(`Min output: ${ethers.utils.formatUnits(params.minAmountOut, 18)}`);
 
+      // Check & ensure token allowance for searcher contract
+      const erc20 = new ethers.Contract(
+        params.tokenIn,
+        [
+          'function allowance(address,address) view returns (uint256)',
+          'function approve(address,uint256) returns (bool)',
+        ],
+        this.executorSigner
+      );
+      const ownerAddress = await this.executorSigner.getAddress();
+      const currentAllowance: BigNumber = await erc20.allowance(
+        ownerAddress,
+        this.searcher.address
+      );
+      if (currentAllowance.lt(params.amountIn)) {
+        logger.info(`Approving SniperSearcher (${this.searcher.address}) for ${params.tokenIn}...`);
+        const approveTx = await erc20.approve(this.searcher.address, ethers.constants.MaxUint256);
+        await approveTx.wait(1);
+        logger.info('✓ Approval confirmed');
+      }
+
       // Estimate gas
       const gasEstimate = await this.estimateSwapGas(params);
       logger.info(`Gas estimate: ${gasEstimate.toString()}`);
@@ -324,8 +345,12 @@ export class SniperExecutor {
       );
       return gasEstimate;
     } catch (error) {
-      console.warn('Gas estimation failed, using default', error);
-      return BigNumber.from('2000000');
+      const reason = error instanceof Error ? error.message : String(error);
+      const err = new Error(
+        `Gas estimation failed (transaction would revert): ${reason}`
+      ) as Error & { cause: unknown };
+      err.cause = error;
+      throw err;
     }
   }
 
@@ -345,8 +370,12 @@ export class SniperExecutor {
       );
       return gasEstimate;
     } catch (error) {
-      console.warn('Gas estimation failed, using default', error);
-      return BigNumber.from('2000000');
+      const reason = error instanceof Error ? error.message : String(error);
+      const err = new Error(
+        `Gas estimation failed (transaction would revert): ${reason}`
+      ) as Error & { cause: unknown };
+      err.cause = error;
+      throw err;
     }
   }
 

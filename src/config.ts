@@ -19,6 +19,10 @@ validatePrivateKey(WALLET_PRIVATE_KEY);
 
 const SWAP_ROUTER_ADDRESS = validateAndChecksumAddress(getRequiredEnv('SWAP_ROUTER_ADDRESS'));
 
+const QUOTER_ADDRESS = validateAndChecksumAddress(
+  getOptionalEnv('QUOTER_ADDRESS', '0x61fFE014bA17989E743c5F6cB21bF9697530B21e')
+);
+
 const PERMIT2_ADDRESS = validateAndChecksumAddress(
   getOptionalEnv('PERMIT2_ADDRESS', '0x000000000022D473030f116DfC393aC15502d30e')
 );
@@ -54,6 +58,7 @@ export const signer = new Wallet(WALLET_PRIVATE_KEY, provider);
 // Export validated contract addresses
 export {
   SWAP_ROUTER_ADDRESS,
+  QUOTER_ADDRESS,
   PERMIT2_ADDRESS,
   SNIPER_SEARCHER_ADDRESS,
   FLASH_LOAN_RECEIVER_ADDRESS,

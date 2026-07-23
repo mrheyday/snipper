@@ -2,6 +2,7 @@ import { BigNumber, ethers } from 'ethers';
 import { SniperExecutor } from './executor';
 import { FlashLoanExecutor } from './flashExecutor';
 import { EIP7702Executor } from './eip7702';
+import { FlashSizer } from './flashSizer';
 import { signer } from './config';
 
 /**
@@ -19,6 +20,13 @@ interface BridgeConfig {
   flashLoanReceiverAddress: string;
   delegatedExecutorAddress: string;
   preferredMode?: ExecutionMode;
+  /**
+   * When true (default when preferredMode === FLASH_LOAN), the bridge queries
+   * FlashSizer on every execution to determine the optimal borrow amount from
+   * live Aave liquidity and DEX quotes.  The opportunity's amountIn is used
+   * only as an upper bound; the dynamic size may be smaller or larger.
+   */
+  dynamicFlashSize?: boolean;
 }
 
 interface SwapOpportunity {
@@ -53,11 +61,20 @@ export class ExecutionBridge {
   private eip7702Executor: EIP7702Executor;
   private config: BridgeConfig;
 
+  private flashSizer: FlashSizer;
+
   constructor(config: BridgeConfig) {
     this.config = config;
     this.directExecutor = new SniperExecutor(config.sniperSearcherAddress, signer);
     this.flashExecutor = new FlashLoanExecutor(config.flashLoanReceiverAddress);
     this.eip7702Executor = new EIP7702Executor(config.delegatedExecutorAddress);
+    // FlashSizer is always instantiated; it is only invoked when dynamicFlashSize is true.
+    this.flashSizer = new FlashSizer({
+      // Use 0.5% slippage ceiling — never relaxed during size search
+      maxSlippageBps: 50,
+      // Require at least 0.10% net profit after Aave fee and worst-case slippage
+      minProfitBps: 10,
+    });
   }
 
   /**
@@ -77,7 +94,15 @@ export class ExecutionBridge {
     const result = await this.executeByMode(mode, opportunity);
     if (result.success) return result;
 
-    // Fallback cascade
+    // Flash-loan-only: no fallback to other modes.
+    // Capital-free execution is the entire point; falling back to direct would
+    // require on-chain funds and defeats the purpose.
+    if (mode === ExecutionMode.FLASH_LOAN || this.config.preferredMode === ExecutionMode.FLASH_LOAN) {
+      console.log(`  Flash loan failed — no fallback permitted in flash-loan-only mode.`);
+      return result;
+    }
+
+    // Fallback cascade for auto mode only (non-flash-loan preferred)
     console.log(`  Mode ${mode} failed, attempting fallback...`);
     result.fallbackAttempted = true;
 
@@ -166,16 +191,60 @@ export class ExecutionBridge {
   }
 
   /**
-   * Flash loan execution via Aave + FlashLoanReceiver
+   * Flash loan execution via Aave + FlashLoanReceiver.
+   *
+   * When `dynamicFlashSize` is enabled (default for FLASH_LOAN mode), the borrow
+   * amount is computed on-the-fly by FlashSizer:
+   *   1. Queries live Aave reserve liquidity
+   *   2. Caps at 30 % of that liquidity
+   *   3. Binary-searches for the largest amount whose DEX quote satisfies
+   *      the slippage ceiling (0.5 %) and minimum profit floor (0.10 %)
+   *
+   * The slippage constraint is NEVER relaxed during the search.
    */
   private async executeFlashLoan(opportunity: SwapOpportunity): Promise<BridgeExecutionResult> {
-    console.log(`  ⚡ Flash loan execution via Aave V3`);
+    const useDynamic =
+      this.config.dynamicFlashSize !== false; // default true
+
+    let loanAmount = opportunity.amountIn;
+    let loanMinAmountOut = opportunity.minAmountOut;
+
+    if (useDynamic) {
+      console.log(`  ⚡ Flash loan — computing dynamic loan size via FlashSizer...`);
+      const sized = await this.flashSizer.computeOptimalSize(
+        opportunity.tokenIn,
+        opportunity.tokenOut
+      );
+
+      if (!sized) {
+        return {
+          success: false,
+          mode: ExecutionMode.FLASH_LOAN,
+          error:
+            'FlashSizer: no profitable loan size found within slippage constraint. ' +
+            'Possible causes: insufficient Aave liquidity, price impact too high, or no DEX route.',
+        };
+      }
+
+      console.log(`  ⚡ Flash loan execution via Aave V3 (dynamic size)`);
+      console.log(`     Loan amount:   ${ethers.utils.formatUnits(sized.amount, 18)}`);
+      console.log(`     Expected out:  ${ethers.utils.formatUnits(sized.expectedOutput, 18)}`);
+      console.log(`     Min amount out:${ethers.utils.formatUnits(sized.minAmountOut, 18)}`);
+      console.log(`     Aave fee:      ${ethers.utils.formatUnits(sized.fee, 18)}`);
+      console.log(`     Net profit:    ${ethers.utils.formatUnits(sized.netProfit, 18)}`);
+      console.log(`     DEX:           ${sized.dexName}`);
+
+      loanAmount = sized.amount;
+      loanMinAmountOut = sized.minAmountOut;
+    } else {
+      console.log(`  ⚡ Flash loan execution via Aave V3 (fixed size from config)`);
+    }
 
     const result = await this.flashExecutor.executeFlashLoanArbitrage({
       token: opportunity.tokenIn,
-      amount: opportunity.amountIn,
+      amount: loanAmount,
       swapPath: opportunity.path,
-      minAmountOut: opportunity.minAmountOut,
+      minAmountOut: loanMinAmountOut,
     });
 
     if (!result.success) {
