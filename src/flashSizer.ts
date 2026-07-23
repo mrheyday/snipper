@@ -3,6 +3,7 @@ import { UiPoolDataProvider } from '@aave/contract-helpers';
 import { provider } from './config';
 import { DEXAggregator } from './dexAggregator';
 import { Logger } from './logger';
+import { bitquery } from './bitquery';
 
 const logger = new Logger('FlashSizer');
 
@@ -64,6 +65,11 @@ export interface SizerConfig {
    * Token decimals for the borrow asset (used for pretty-printing only).
    */
   tokenDecimals?: number;
+  /**
+   * Optional Uniswap/DEX pool address. When set and Bitquery is configured,
+   * DEXPoolSlippages MaxAmountIn at maxSlippageBps further caps the search.
+   */
+  poolAddress?: string;
 }
 
 const DEFAULT_CONFIG: SizerConfig = {
@@ -109,11 +115,13 @@ export class FlashSizer {
    *
    * @param tokenIn   Address of the asset to borrow (and sell)
    * @param tokenOut  Address of the asset to receive
+   * @param opts.poolAddress  Optional pool for Bitquery slippage depth cap
    * @returns SizedLoan if a profitable, slippage-safe loan exists; null otherwise.
    */
   async computeOptimalSize(
     tokenIn: string,
-    tokenOut: string
+    tokenOut: string,
+    opts?: { poolAddress?: string }
   ): Promise<SizedLoan | null> {
     logger.info(`[FlashSizer] Computing optimal flash loan size`);
     logger.info(`  Borrow token:  ${tokenIn}`);
@@ -131,11 +139,61 @@ export class FlashSizer {
       `  Aave liquidity: ${ethers.utils.formatUnits(availableLiquidity, decimals)}`
     );
 
-    // 2. Apply caps
+    // 2. Apply caps (Aave fraction + hard max)
     const liquidityCap = BigNumber.from(
       (availableLiquidity.toBigInt() * MAX_LIQUIDITY_FRACTION_BPS) / BPS_DENOM
     );
-    const upperBound = this.minBN(liquidityCap, this.config.maxBorrowCap);
+    let upperBound = this.minBN(liquidityCap, this.config.maxBorrowCap);
+
+    // 2b. Bitquery pool depth at target slippage (pre-trade gate)
+    const pool = opts?.poolAddress || this.config.poolAddress;
+    if (pool && bitquery.configured) {
+      const maxIn = await bitquery.maxInputAtSlippage(
+        pool,
+        tokenIn,
+        this.config.maxSlippageBps
+      );
+      if (maxIn) {
+        try {
+          // Bitquery MaxAmountIn is typically a decimal string of token units.
+          // Prefer raw integer parse; fall back to parseUnits if dotted.
+          let dexCap: BigNumber;
+          if (maxIn.includes('.')) {
+            dexCap = ethers.utils.parseUnits(maxIn, decimals);
+          } else {
+            dexCap = BigNumber.from(maxIn);
+          }
+          if (dexCap.gt(0)) {
+            logger.info(
+              `  Bitquery MaxAmountIn@${this.config.maxSlippageBps}bps: ` +
+                `${ethers.utils.formatUnits(dexCap, decimals)}`
+            );
+            upperBound = this.minBN(upperBound, dexCap);
+          }
+        } catch (e) {
+          logger.warn(
+            `  Bitquery depth parse skipped: ${
+              e instanceof Error ? e.message : String(e)
+            }`
+          );
+        }
+      } else {
+        logger.info('  Bitquery slippage depth unavailable; using Aave/hard caps only');
+      }
+
+      // Optional log of reserves for operator visibility
+      try {
+        const liq = await bitquery.poolLiquidity(pool, 1);
+        if (liq[0]) {
+          logger.info(
+            `  Pool reserves (Bitquery): A=${liq[0].amountA} B=${liq[0].amountB} ` +
+              `(${liq[0].protocol || 'dex'})`
+          );
+        }
+      } catch {
+        /* non-fatal */
+      }
+    }
 
     if (upperBound.lt(MIN_LOAN_WEI)) {
       logger.warn(

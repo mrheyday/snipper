@@ -37,6 +37,8 @@ interface SwapOpportunity {
   minAmountOut: BigNumber;
   deadline: number;
   estimatedProfit?: BigNumber;
+  /** Optional DEX pool for Bitquery slippage/depth sizing */
+  poolAddress?: string;
 }
 
 interface BridgeExecutionResult {
@@ -197,6 +199,7 @@ export class ExecutionBridge {
    * amount is computed on-the-fly by FlashSizer:
    *   1. Queries live Aave reserve liquidity
    *   2. Caps at 30 % of that liquidity
+   *   2b. Caps with Bitquery pool MaxAmountIn at slippage target (if pool set)
    *   3. Binary-searches for the largest amount whose DEX quote satisfies
    *      the slippage ceiling (0.5 %) and minimum profit floor (0.10 %)
    *
@@ -213,7 +216,8 @@ export class ExecutionBridge {
       console.log(`  ⚡ Flash loan — computing dynamic loan size via FlashSizer...`);
       const sized = await this.flashSizer.computeOptimalSize(
         opportunity.tokenIn,
-        opportunity.tokenOut
+        opportunity.tokenOut,
+        { poolAddress: opportunity.poolAddress }
       );
 
       if (!sized) {

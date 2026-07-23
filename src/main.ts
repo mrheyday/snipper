@@ -13,6 +13,7 @@ import {
 } from './config';
 import { Logger } from './logger';
 import { validateAndChecksumAddress, validateFeeTier } from './validation';
+import { bitquery } from './bitquery';
 
 interface OpportunityParams {
   tokenIn: string;
@@ -22,6 +23,7 @@ interface OpportunityParams {
   minAmountOut: BigNumber;
   deadline: number;
   estimatedProfit: BigNumber;
+  poolAddress?: string;
 }
 
 const logger = new Logger('SniperBot');
@@ -59,12 +61,20 @@ class SniperBot {
       // Verify setup
       await this.verifySetup();
 
-      // Detect pool
-      logger.info('Detecting latest Uniswap V3 pool...');
-      const { Token0, Token1 } = await getTokens();
+      // Detect latest WETH-paired Uniswap V3 pool (Bitquery HTTP)
+      logger.info('Detecting latest WETH-paired Uniswap V3 pool (Bitquery)...');
+      const detected = await getTokens({ wethOnly: true });
+      const { Token0, Token1 } = detected;
+      const detectedPool = detected.pool;
 
       if (!Token0 || !Token1) {
         throw new Error('Failed to detect tokens from pool');
+      }
+      if (detectedPool) {
+        logger.info(`Pool address from Bitquery: ${detectedPool}`);
+      }
+      if (detected.fee !== undefined) {
+        logger.info(`Pool fee tier from event: ${detected.fee}`);
       }
 
       const AAVE_RESERVE_TOKENS = [
@@ -147,28 +157,50 @@ class SniperBot {
       // from live Aave liquidity and a fresh DEX quote at that exact amount.
       const sentinelAmount = probeAmount;
 
-      // Execute via bridge (dynamic sizing happens inside bridge.executeFlashLoan)
-      logger.info('Executing flash loan via execution bridge (dynamic sizing)...');
-      const result = await this.executeWithRetry({
-        tokenIn: tokenFrom.address,
-        tokenOut: tokenTo.address,
-        amountIn: sentinelAmount, // overridden by FlashSizer inside the bridge
-        path,
-        minAmountOut: BigNumber.from(0), // overridden by FlashSizer inside the bridge
-        deadline: DEADLINE,
-        estimatedProfit: BigNumber.from(0),
-      });
-
-
-      if (!result.success) {
-        throw new Error(`Execution failed: ${result.error}`);
+      // Optional: short-lived DEX-trade watcher for the output token (confirmation / MEV noise)
+      let tradeWatch: { unsubscribe: () => void } | undefined;
+      if (bitquery.configured) {
+        tradeWatch = bitquery.subscribeDexTrades(
+          (t) => {
+            logger.info(
+              `DEX trade ${t.protocol || '?'}: sell ${t.sellAmount || '?'} ` +
+                `${t.sellToken || '?'} -> buy ${t.buyAmount || '?'} ${t.buyToken || '?'}` +
+                (t.txHash ? ` tx=${t.txHash.slice(0, 10)}...` : '')
+            );
+          },
+          {
+            token: tokenTo.address,
+            onError: (e) => logger.warn(`DEX trade stream: ${e.message}`),
+          }
+        );
       }
 
-      logger.info(`✓ Swap successful!`);
-      logger.info(`  Mode: ${result.mode}`);
-      logger.info(`  Tx: ${result.txHash}`);
-      logger.info(`  Gas: ${result.gasUsed?.toString()}`);
-      logger.info(`  Profit: ${ethers.utils.formatUnits(result.profit || 0, 18)}`);
+      // Execute via bridge (dynamic sizing happens inside bridge.executeFlashLoan)
+      logger.info('Executing flash loan via execution bridge (dynamic sizing)...');
+      try {
+        const result = await this.executeWithRetry({
+          tokenIn: tokenFrom.address,
+          tokenOut: tokenTo.address,
+          amountIn: sentinelAmount, // overridden by FlashSizer inside the bridge
+          path,
+          minAmountOut: BigNumber.from(0), // overridden by FlashSizer inside the bridge
+          deadline: DEADLINE,
+          estimatedProfit: BigNumber.from(0),
+          poolAddress: detectedPool,
+        });
+
+      if (!result.success) {
+          throw new Error(`Execution failed: ${result.error}`);
+        }
+
+        logger.info(`✓ Swap successful!`);
+        logger.info(`  Mode: ${result.mode}`);
+        logger.info(`  Tx: ${result.txHash}`);
+        logger.info(`  Gas: ${result.gasUsed?.toString()}`);
+        logger.info(`  Profit: ${ethers.utils.formatUnits(result.profit || 0, 18)}`);
+      } finally {
+        tradeWatch?.unsubscribe();
+      }
     } catch (error) {
       logger.error(`Bot failed: ${error instanceof Error ? error.message : String(error)}`);
       process.exit(1);
