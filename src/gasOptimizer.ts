@@ -35,12 +35,13 @@ interface ProfitabilityAnalysis {
  */
 export class GasOptimizer {
   private readonly chainId: number; // For EIP-7702 authorization hashing
-  private readonly flashLoanPremium: BigNumber; // 0.09% = 9 basis points
+  private readonly flashLoanPremium: BigNumber; // bps hint; live Pool is source of truth
   private readonly slippageBuffer: BigNumber; // additional slippage allowance
 
   constructor(chainId: number = 42161) {
     this.chainId = chainId;
-    this.flashLoanPremium = BigNumber.from(9); // Aave V3: 9 basis points
+    // Arbitrum Aave V3 FLASHLOAN_PREMIUM_TOTAL = 5 bps (was 9 at V3 launch)
+    this.flashLoanPremium = BigNumber.from(5);
     this.slippageBuffer = BigNumber.from(10); // 0.1% additional buffer
 
     logger.info(`Initialized GasOptimizer for chain ${this.chainId}`);
@@ -107,7 +108,7 @@ export class GasOptimizer {
    * - Swap in callback: ~100,000 gas
    * - Repayment: ~30,000 gas
    * - Total: ~200,000 gas
-   * Note: Plus 0.09% flash loan premium
+   * Note: Plus flash loan premium (Aave FLASHLOAN_PREMIUM_TOTAL bps)
    */
   async estimateFlashLoanModeGas(borrowAmount: BigNumber): Promise<GasEstimate> {
     const { maxFeePerGas, baseFee, priorityFee } = await this.getCurrentGasPrices();
@@ -115,8 +116,8 @@ export class GasOptimizer {
     const gasLimit = BigNumber.from('200000'); // Typical flash loan
     const estimatedCost = gasLimit.mul(maxFeePerGas);
 
-    // Calculate flash loan premium
-    const premiumBps = this.flashLoanPremium; // 9 bps
+    // Calculate flash loan premium (hint bps; on-chain uses callback premium)
+    const premiumBps = this.flashLoanPremium;
     const premiumAmount = borrowAmount.mul(premiumBps).div(10000);
 
     return {

@@ -94,6 +94,13 @@ contract Deploy is Script {
         BasicEOABatchExecutor basicEoaBatchExecutor = new BasicEOABatchExecutor();
         console.log("    [OK] BasicEOABatchExecutor deployed to:", address(basicEoaBatchExecutor));
 
+        // 5. Whitelist FlashLoanReceiver on SniperSearcher so executeOperation can call
+        //    executeSwap (onlyOwnerOrAllowedExecutor). Without this, flash callbacks revert
+        //    Unauthorized even with correct ERC20 approvals.
+        console.log("[5] Allowing FlashLoanReceiver as SniperSearcher executor...");
+        sniperSearcher.allowExecutor(address(flashLoanReceiver));
+        console.log("    [OK] allowedExecutors[FlashLoanReceiver] = true");
+
         vm.stopBroadcast();
 
         // Print summary
@@ -117,14 +124,20 @@ contract Deploy is Script {
         console.log("  DelegatedExecutor       = single-target Uniswap swaps (hardcoded router)");
         console.log("  BasicEOABatchExecutor   = multi-target CALL batch (any contract)");
         console.log("");
+        console.log("Permissions wired:");
+        console.log("  SniperSearcher.allowExecutor(FlashLoanReceiver) = true");
+        console.log("  FlashLoanReceiver approves SniperSearcher + Aave pool at runtime");
+        console.log("  SniperSearcher approves Uniswap SwapRouter02 per-swap then revokes");
+        console.log("");
         console.log("Next Steps:");
         console.log("  1. Save these addresses to your .env file");
         console.log("  2. Update SNIPER_SEARCHER_ADDRESS=", address(sniperSearcher));
         console.log("  3. Update FLASH_LOAN_RECEIVER_ADDRESS=", address(flashLoanReceiver));
         console.log("  4. Update DELEGATED_EXECUTOR_ADDRESS=", address(delegatedExecutor));
         console.log("  5. Update BATCH_EXECUTOR_ADDRESS=", address(basicEoaBatchExecutor));
-        console.log("  6. Run integration tests with deployed contracts");
-        console.log("  7. Monitor initial transactions carefully");
+        console.log("  6. On already-deployed stacks: cast send $SNIPER allowExecutor(address) $FLASH");
+        console.log("  7. Run integration tests with deployed contracts");
+        console.log("  8. Monitor initial transactions carefully");
         console.log("");
 
         // Store addresses for later use

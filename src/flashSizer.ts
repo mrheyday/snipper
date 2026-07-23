@@ -11,8 +11,9 @@ const UI_POOL_DATA_PROVIDER_ADDRESS = '0x91E04cf78e53aEBe609e8a7f2003e7EECD743F2
 const POOL_ADDRESSES_PROVIDER_ADDRESS = '0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb';
 const ARBITRUM_CHAIN_ID = 42161;
 
-// Aave flash loan fee: 0.09% = 9 bps
-const FLASH_FEE_BPS = 9n;
+// Aave V3 Arbitrum FLASHLOAN_PREMIUM_TOTAL (live 2026-07-23): 5 bps = 0.05%
+// Governance-updatable — prefer reading Pool when available.
+const FLASH_FEE_BPS = 5n;
 const BPS_DENOM = 10_000n;
 
 // How many evenly-spaced candidate sizes to probe in the coarse scan

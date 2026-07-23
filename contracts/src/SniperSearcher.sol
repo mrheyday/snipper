@@ -158,7 +158,14 @@ contract SniperSearcher is Multicallable {
             revert InsufficientAmountOut(amountOut, minAmountOut);
         }
 
-        emit Swap(tokenIn, _getTokenOut(path), amountIn, amountOut);
+        // Return proceeds to caller so FlashLoanReceiver (and other allowed
+        // executors) can repay Aave / keep profit. Owner calls keep tokens here
+        // unless the owner is itself the msg.sender path — still transfer so
+        // balance accounting is consistent for nested executor flows.
+        address tokenOut = _getTokenOut(path);
+        SafeTransferLib.safeTransfer(tokenOut, msg.sender, amountOut);
+
+        emit Swap(tokenIn, tokenOut, amountIn, amountOut);
     }
 
     /// @notice Execute multi-hop swap with custom deadline
@@ -205,7 +212,10 @@ contract SniperSearcher is Multicallable {
             revert InsufficientAmountOut(amountOut, minAmountOut);
         }
 
-        emit Swap(tokenIn, _getTokenOut(path), amountIn, amountOut);
+        address tokenOut = _getTokenOut(path);
+        SafeTransferLib.safeTransfer(tokenOut, msg.sender, amountOut);
+
+        emit Swap(tokenIn, tokenOut, amountIn, amountOut);
     }
 
     /// @notice Withdraw tokens from contract

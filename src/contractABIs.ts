@@ -497,7 +497,20 @@ export const FLASH_LOAN_RECEIVER_ABI = [
   },
   {
     type: 'function',
-    name: 'FLASH_LOAN_PREMIUM_RATE',
+    name: 'FLASH_LOAN_PREMIUM_RATE_BPS_HINT',
+    inputs: [],
+    outputs: [
+      {
+        name: '',
+        type: 'uint256',
+        internalType: 'uint256',
+      },
+    ],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'flashLoanPremiumBps',
     inputs: [],
     outputs: [
       {

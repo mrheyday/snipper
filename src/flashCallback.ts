@@ -59,9 +59,12 @@ export class FlashLoanCallbackHandler {
   }
 
   /**
-   * Calculate Aave flash loan fee (0.09% or 9 basis points)
+   * Estimate Aave V3 flash loan fee.
+   * Live Arbitrum FLASHLOAN_PREMIUM_TOTAL = 5 bps (0.05%). Prefer reading
+   * Pool.FLASHLOAN_PREMIUM_TOTAL() or FlashLoanReceiver.flashLoanPremiumBps()
+   * for production sizing — this default is a hint only.
    */
-  calculateFlashLoanFee(amount: BigNumber, feeBasisPoints: number = 9): BigNumber {
+  calculateFlashLoanFee(amount: BigNumber, feeBasisPoints: number = 5): BigNumber {
     return amount.mul(feeBasisPoints).div(10000);
   }
 

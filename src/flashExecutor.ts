@@ -1,10 +1,21 @@
-import { BigNumber, ethers, Signer, providers } from 'ethers';
+import { BigNumber, ethers, Signer, Wallet, providers } from 'ethers';
 import { UiPoolDataProvider } from '@aave/contract-helpers';
-import { signer, provider } from './config';
+import {
+  signer,
+  provider,
+  BATCH_EXECUTOR_ADDRESS,
+  CHAIN_ID,
+} from './config';
 import { FLASH_LOAN_RECEIVER_ABI } from './contractABIs';
+import { BatchEOAExecutor, BatchCall } from './eip7702';
 import { Logger } from './logger';
 
 const logger = new Logger('FlashLoanExecutor');
+
+/** Encoded initiateFlashLoan(address,uint256,bytes,uint256) for type-4 batches. */
+const INITIATE_FLASH_IFACE = new ethers.utils.Interface([
+  'function initiateFlashLoan(address token, uint256 amount, bytes swapPath, uint256 minAmountOut)',
+]);
 
 // Aave V3 Arbitrum periphery addresses, verified on-chain and cross-checked against
 // bgd-labs/aave-address-book (AaveV3Arbitrum.sol). POOL_ADDRESSES_PROVIDER matches
@@ -17,8 +28,14 @@ const ARBITRUM_CHAIN_ID = 42161;
 interface FlashLoanParams {
   token: string;
   amount: BigNumber;
-  swapPath: Buffer;
+  swapPath: Buffer | string;
   minAmountOut: BigNumber;
+  /**
+   * When true (and BATCH_EXECUTOR_ADDRESS is configured), initiate via EIP-7702
+   * type-4: EOA authorizes BasicEOABatchExecutor then CALLs FlashLoanReceiver.
+   * Owner of FlashLoanReceiver must be the signing EOA (msg.sender under 7702).
+   */
+  useType4?: boolean;
 }
 
 interface FlashLoanResult {
@@ -28,6 +45,8 @@ interface FlashLoanResult {
   error?: string;
   gasUsed?: BigNumber;
   revertReason?: string;
+  /** Set when the initiation tx was EIP-7702 type-4. */
+  type4?: boolean;
 }
 
 // Aave V3 Lending Pool on Arbitrum: 0x794a61358D6845594F94dc1DB02A252b5b4814aD
@@ -41,13 +60,19 @@ interface FlashLoanResult {
  * 1. Bot initiates flash loan
  * 2. Aave transfers tokens to receiver
  * 3. Receiver executes arbitrage swap
- * 4. Receiver repays loan + 0.09% fee
- * 5. Profit extracted to wallet
+ * 4. Receiver approves Pool for amount+premium (Aave pulls — do not transfer)
+ * 5. Profit (leftover borrow asset) withdrawn by owner
+ *
+ * Aave V3 docs compliance:
+ * - Uses flashLoanSimple (single reserve, no debt mode, fee not waived)
+ * - executeOperation returns true; premium from callback is repay source of truth
+ * - Live Arbitrum FLASHLOAN_PREMIUM_TOTAL = 5 bps (not the historical 9)
  */
 export class FlashLoanExecutor {
   private receiver: ethers.Contract;
   private executorSigner: Signer;
   private poolDataProvider: UiPoolDataProvider;
+  private batchExecutor: BatchEOAExecutor | null;
 
   constructor(receiverAddress: string, executorSigner?: Signer) {
     this.executorSigner = executorSigner || signer;
@@ -61,6 +86,21 @@ export class FlashLoanExecutor {
       provider,
       chainId: ARBITRUM_CHAIN_ID,
     });
+    // Optional EIP-7702 type-4 path (requires BATCH_EXECUTOR_ADDRESS + Wallet signer).
+    if (BATCH_EXECUTOR_ADDRESS && this.executorSigner instanceof Wallet) {
+      this.batchExecutor = new BatchEOAExecutor(
+        BATCH_EXECUTOR_ADDRESS,
+        CHAIN_ID,
+        this.executorSigner
+      );
+    } else {
+      this.batchExecutor = null;
+    }
+  }
+
+  /** True when this executor can send type-4 flash initiations. */
+  supportsType4(): boolean {
+    return this.batchExecutor !== null;
   }
 
   /**
@@ -116,7 +156,7 @@ export class FlashLoanExecutor {
       logger.info('Initiating flash loan arbitrage');
       logger.info(`Borrowing: ${ethers.utils.formatUnits(params.amount, 18)}`);
       logger.info(`Min output: ${ethers.utils.formatUnits(params.minAmountOut, 18)}`);
-      logger.info('Fee: 0.09% (Aave V3)');
+      logger.info('Fee: Pool FLASHLOAN_PREMIUM_TOTAL bps (Arbitrum ~0.05%)');
 
       // Check reserve eligibility before attempting anything on-chain — cheap,
       // free (view calls only), and gives a clear reason instead of a bare revert.
@@ -129,11 +169,17 @@ export class FlashLoanExecutor {
         };
       }
 
+      // Type-4 path: EOA delegates to BEBE and CALLs FlashLoanReceiver.initiateFlashLoan.
+      // Owner of the receiver must be the signing EOA (msg.sender under EIP-7702).
+      if (params.useType4) {
+        return this.executeFlashLoanType4(params);
+      }
+
       // Estimate gas
       const gasEstimate = await this.estimateFlashLoanGas(params);
       logger.info(`Gas estimate: ${gasEstimate.toString()}`);
 
-      // Initiate flash loan
+      // Initiate flash loan (standard type-2 EIP-1559 tx)
       const tx = await this.receiver.initiateFlashLoan(
         params.token,
         params.amount,
@@ -189,6 +235,7 @@ export class FlashLoanExecutor {
         txHash,
         profit: profit,
         gasUsed: receipt.gasUsed,
+        type4: false,
       };
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
@@ -300,18 +347,105 @@ export class FlashLoanExecutor {
   }
 
   /**
-   * Estimate profit from flash loan arbitrage
-   * profit = outputAmount - loanAmount - fee
-   * where fee = loanAmount * 0.0009 (0.09%)
+   * Estimate profit from flash loan arbitrage.
+   * profit ≈ minAmountOut - loanAmount - fee
+   * fee uses Pool premium bps when readable, else 5 bps Arbitrum hint.
+   * Path must round-trip to the borrow asset for repay to succeed.
    */
   private async getProfitEstimate(params: FlashLoanParams): Promise<BigNumber> {
-    const fee = params.amount.mul(9).div(10000); // 0.09% fee
+    const feeBps = await this.getFlashPremiumBps();
+    const fee = params.amount.mul(feeBps).div(10000);
     const totalCost = params.amount.add(fee);
 
-    // Estimate: if we get at least minAmountOut, profit is:
     return params.minAmountOut.sub(totalCost).gt(0)
       ? params.minAmountOut.sub(totalCost)
       : BigNumber.from(0);
+  }
+
+  /**
+   * Read live FLASHLOAN_PREMIUM_TOTAL via receiver.flashLoanPremiumBps(), fallback 5.
+   */
+  private async getFlashPremiumBps(): Promise<number> {
+    try {
+      const bps = await this.receiver.flashLoanPremiumBps();
+      const n = BigNumber.from(bps).toNumber();
+      if (n > 0 && n < 10_000) return n;
+    } catch {
+      // redeployed ABI / offline
+    }
+    return 5;
+  }
+
+  /**
+   * Initiate flash loan via EIP-7702 type-4 + BasicEOABatchExecutor.
+   *
+   * Flow:
+   *   1. EOA signs auth -> BasicEOABatchExecutor
+   *   2. type-4 tx `to=EOA` data=execute([CALL FlashLoanReceiver.initiateFlashLoan])
+   *   3. Under 7702, msg.sender of that CALL is the EOA (must be FlashLoanReceiver.owner)
+   *   4. FlashLoanReceiver -> Aave.flashLoanSimple -> executeOperation
+   *      - approves SniperSearcher, executeSwap, approves Aave for repay
+   */
+  private async executeFlashLoanType4(params: FlashLoanParams): Promise<FlashLoanResult> {
+    if (!this.batchExecutor) {
+      return {
+        success: false,
+        error:
+          'Type-4 flash loan unavailable: set BATCH_EXECUTOR_ADDRESS and use a Wallet signer',
+        type4: true,
+      };
+    }
+
+    const pathHex =
+      typeof params.swapPath === 'string'
+        ? params.swapPath
+        : ethers.utils.hexlify(params.swapPath);
+
+    const data = INITIATE_FLASH_IFACE.encodeFunctionData('initiateFlashLoan', [
+      params.token,
+      params.amount,
+      pathHex,
+      params.minAmountOut,
+    ]);
+
+    const calls: BatchCall[] = [
+      {
+        to: this.receiver.address,
+        data,
+      },
+    ];
+
+    logger.info('Initiating flash loan via EIP-7702 type-4 batch');
+    logger.info(`  receiver: ${this.receiver.address}`);
+    logger.info(`  batchExecutor: ${this.batchExecutor.getExecutorAddress()}`);
+
+    const result = await this.batchExecutor.executeBatchCalls(calls, {
+      // Flash + Aave callback + Uniswap swap is heavier than a plain approve/swap.
+      gasLimit: BigNumber.from(1_200_000),
+    });
+
+    if (!result.success) {
+      return {
+        success: false,
+        error: result.error ?? 'type-4 flash loan failed',
+        txHash: result.txHash,
+        gasUsed: result.gasUsed,
+        type4: true,
+      };
+    }
+
+    const profit = await this.getProfitEstimate(params);
+    if (profit.gt(0)) {
+      logger.info(`Estimated profit: ${ethers.utils.formatUnits(profit, 18)}`);
+    }
+
+    return {
+      success: true,
+      txHash: result.txHash,
+      profit,
+      gasUsed: result.gasUsed,
+      type4: true,
+    };
   }
 
   /**
@@ -408,11 +542,15 @@ export class FlashLoanExecutor {
  */
 
 /**
- * Calculate Aave flash loan fee
- * Fee = amount × 0.09% (0.0009)
+ * Estimate Aave V3 flash loan fee.
+ * Default 5 bps matches Arbitrum FLASHLOAN_PREMIUM_TOTAL as of 2026-07-23.
+ * Pass live bps from Pool.FLASHLOAN_PREMIUM_TOTAL() when available.
  */
-export function calculateFlashLoanFee(amount: BigNumber): BigNumber {
-  return amount.mul(9).div(10000);
+export function calculateFlashLoanFee(
+  amount: BigNumber,
+  premiumBps: number = 5
+): BigNumber {
+  return amount.mul(premiumBps).div(10000);
 }
 
 /**
@@ -432,7 +570,7 @@ export function calculateBreakEvenPrice(
 
 /**
  * Calculate max borrow amount given gas budget
- * maxBorrow = gasbudget / (gasPricePerBorrow + 0.09% fee cost)
+ * maxBorrow = gasbudget / (gasPricePerBorrow + ~0.05% fee cost)
  */
 export function calculateMaxBorrowAmount(
   gasBudgetWei: BigNumber,
@@ -441,9 +579,8 @@ export function calculateMaxBorrowAmount(
   // Calculate max borrow given gas budget
   const maxFromBudget = gasBudgetWei.div(gasPriceWei);
 
-  // Fee impact: for every 1 token borrowed, 0.0009 is paid as fee
-  // Effective cost = 1.0009 per token
-  return maxFromBudget.mul(10000).div(10009);
+  // Fee impact at 5 bps: effective cost ≈ 1.0005 per token
+  return maxFromBudget.mul(10000).div(10005);
 }
 
 export default FlashLoanExecutor;

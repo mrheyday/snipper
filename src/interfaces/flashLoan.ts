@@ -6,7 +6,7 @@ import { BigNumber } from 'ethers';
 export interface IFlashLoanProvider {
   name: string;
   address: string;
-  fee: number; // in basis points (e.g., 9 = 0.09%)
+  fee: number; // in basis points (e.g., 5 = 0.05% on Arbitrum Aave V3)
 }
 
 /**

@@ -335,7 +335,7 @@ export class ExecutionBridge {
   private shouldUseFlashLoan(opportunity: SwapOpportunity): boolean {
     // Flash loan is best for:
     // - Zero capital situations
-    // - Large swaps (amortize 0.09% fee)
+    // - Large swaps (amortize ~0.05% Aave fee)
     // - Multiple opportunities in sequence
     return opportunity.amountIn.gt(BigNumber.from('1000000000000000000')); // > 1 token
   }
@@ -447,8 +447,8 @@ export class BridgeStrategyAnalyzer {
     const directGas = 150000;
     const directCost = opportunity.amountIn;
 
-    // Flash loan: 0.09% fee only
-    const flashFee = opportunity.amountIn.mul(9).div(10000); // 0.09%
+    // Flash loan: Aave V3 fee (Arbitrum live 5 bps / 0.05%; governance-updatable)
+    const flashFee = opportunity.amountIn.mul(5).div(10000);
 
     // Recommend based on cost efficiency
     let recommended = ExecutionMode.DIRECT;
@@ -456,7 +456,7 @@ export class BridgeStrategyAnalyzer {
 
     if (opportunity.estimatedProfit?.lt(flashFee)) {
       recommended = ExecutionMode.EIP7702;
-      reasoning = 'Profit too low for flash loan fee (0.09%)';
+      reasoning = 'Profit too low for flash loan fee (~0.05%)';
     } else if (opportunity.estimatedProfit && opportunity.estimatedProfit.gt(flashFee)) {
       recommended = ExecutionMode.FLASH_LOAN;
       reasoning = 'Large profit justifies flash loan fee';
@@ -489,7 +489,7 @@ export class BridgeStrategyAnalyzer {
     const eip7702Gas = BigNumber.from(150000);
 
     const directCost = directGas.mul(gasPrice);
-    const flashCost = flashGas.mul(gasPrice).add(opportunity.amountIn.mul(9).div(10000)); // gas + fee
+    const flashCost = flashGas.mul(gasPrice).add(opportunity.amountIn.mul(5).div(10000)); // gas + fee
     const eip7702Cost = eip7702Gas.mul(gasPrice);
 
     return {

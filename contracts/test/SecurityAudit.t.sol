@@ -89,30 +89,24 @@ contract AuditTest is Test {
     }
 
     // ============================================
-    // FINDING 3: FlashLoanReceiver Integration Broken (HIGH)
+    // FINDING 3: FlashLoanReceiver Integration (FIXED)
     // ============================================
-    // PoC: FlashLoanReceiver.executeOperation calls SniperSearcher.executeSwap
-    // But executeSwap is onlyOwner and requires transferFrom
-    // Issue: No funding path, no approval - callback will fail
+    // Historical PoC: missing allowExecutor + no approve + amountOut stuck on searcher.
+    // Fix: Deploy.s.sol allowExecutor, FlashLoanReceiver approves swapExecutor, searcher
+    // returns amountOut to msg.sender. This test asserts the allowlist is required.
     function test_PoC_FlashLoanReceiver_BrokenIntegration() public {
-        address lendingPool = address(this);
         address token = address(tokenA);
         uint256 amount = 100e18;
-        bytes memory swapPath = abi.encodePacked(address(tokenA), address(tokenB));
+        bytes memory swapPath = abi.encodePacked(address(tokenA), uint24(3000), address(tokenB));
         uint256 minAmountOut = 100e6;
 
-        // When flashReceiver.executeOperation is called:
-        // 1. It calls searcher.executeSwap(token, amount, swapPath, minAmountOut)
-        // 2. But searcher.executeSwap does: IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), amountIn)
-        // 3. msg.sender is the flashReceiver, which hasn't been approved
-        // 4. Result: This will revert
+        // Without allowExecutor(flashReceiver), callback still reverts Unauthorized.
+        tokenA.mint(address(flashReceiver), amount);
+        bytes memory params = abi.encode(token, swapPath, minAmountOut);
 
-        // Simulate what executeOperation does internally:
-        bytes memory params = abi.encode(token, swapPath, minAmountOut, address(this));
-
-        vm.expectRevert(); // Will fail due to integration issue
+        vm.expectRevert(); // Unauthorized (executor not allowed on this suite's searcher)
         bool result = flashReceiver.executeOperation(token, amount, 9, address(flashReceiver), params);
-        result; // call is expected to revert; captured only to satisfy the return-value check
+        result;
     }
 
     // ============================================

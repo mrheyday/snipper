@@ -73,18 +73,27 @@ TEST_SUMMARY=$(echo "$TEST_OUTPUT" | grep -E "passed|failed" | tail -1)
 echo "$TEST_SUMMARY"
 echo ""
 
-# Register delegate via DelegatedExecutor
-echo -e "${BLUE}Step 3: Registering Delegate Executor${NC}"
+# Register flash-loan executor + note EIP-7702 batch path
+echo -e "${BLUE}Step 3: Wiring FlashLoanReceiver as allowed executor${NC}"
 echo ""
 
 DELEGATE_ADDRESS="${DELEGATED_EXECUTOR_ADDRESS}"
 DEPLOYER_ADDRESS="${EOA_ADDRESS:-0x00000001386687D89e6A36aE01C5e5F75acF61Af}"
 
-echo "Registering delegate executor..."
-echo "  Delegate: $DELEGATE_ADDRESS"
-echo "  Owner: $DEPLOYER_ADDRESS"
+echo "Ensure SniperSearcher.allowExecutor(FlashLoanReceiver) is set:"
+echo "  SniperSearcher:      $SNIPER_SEARCHER_ADDRESS"
+echo "  FlashLoanReceiver:   $FLASH_LOAN_RECEIVER_ADDRESS"
+echo "  DelegatedExecutor:   $DELEGATE_ADDRESS"
+echo "  Owner:               $DEPLOYER_ADDRESS"
+if [[ -n "${BATCH_EXECUTOR_ADDRESS:-}" ]]; then
+  echo "  BatchEOAExecutor:    $BATCH_EXECUTOR_ADDRESS (type-4 flash path available)"
+fi
 echo ""
-echo -e "${GREEN}✅ Delegate registration configured${NC}"
+echo "  cast send \$SNIPER_SEARCHER_ADDRESS \\"
+echo "    \"allowExecutor(address)\" \$FLASH_LOAN_RECEIVER_ADDRESS \\"
+echo "    --rpc-url \$RPC --private-key \$WALLET_PRIVATE_KEY"
+echo ""
+echo -e "${GREEN}✅ Flash/executor permissioning noted${NC}"
 echo ""
 
 # Generate deployment report
