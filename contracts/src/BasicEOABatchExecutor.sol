@@ -14,7 +14,12 @@ contract BasicEOABatchExecutor is ERC7821 {
     /// @dev Validates the signature with ERC1271 return.
     /// This enables the EOA to still verify regular ECDSA signatures if the contract
     /// checks that it has code and calls this function instead of `ecrecover`.
-    function isValidSignature(bytes32 hash, bytes calldata signature) public view virtual returns (bytes4 result) {
+    function isValidSignature(bytes32 hash, bytes calldata signature)
+        public
+        view
+        virtual
+        returns (bytes4 result)
+    {
         bool success = ECDSA.recoverCalldata(hash, signature) == address(this);
         /// @solidity memory-safe-assembly
         assembly {

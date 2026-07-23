@@ -20,8 +20,8 @@ contract CallerProbe {
     }
 }
 
-/// @notice Verifies BasicEOABatchExecutor can CALL arbitrary other contracts when
-///         invoked as address(this) (the EIP-7702 self-call pattern).
+/// @notice Verifies BasicEOABatchExecutor (BEBE): ERC-7821 batch + ERC-1271
+///         isValidSignature for EIP-7702 EOA delegation.
 contract BasicEOABatchExecutorTest is Test {
     BasicEOABatchExecutor public bebe;
     CallerProbe public probeA;
@@ -32,15 +32,29 @@ contract BasicEOABatchExecutorTest is Test {
     bytes32 constant MODE_BATCH_NO_OPDATA =
         0x0100000000000000000000000000000000000000000000000000000000000000;
 
+    bytes32 constant MODE_BATCH_WITH_OPDATA =
+        0x0100000000007821000100000000000000000000000000000000000000000000;
+
+    bytes4 constant ERC1271_MAGIC = 0x1626ba7e;
+    bytes4 constant ERC1271_FAIL = 0xffffffff;
+
+    /// @dev Canonical BEBE CREATE2 address (Vectorized/bebe).
+    address constant CANONICAL_BEBE = 0x00000000BEBEDB7C30ee418158e26E31a5A8f3E2;
+
+    uint256 eoaKey;
+    address eoa;
+
     function setUp() public {
         bebe = new BasicEOABatchExecutor();
         probeA = new CallerProbe();
         probeB = new CallerProbe();
         token = new ERC20Mock("T", "T", 18);
+        (eoa, eoaKey) = makeAddrAndKey("bebe-eoa");
     }
 
     function test_SupportsExecutionMode() public view {
         assertTrue(bebe.supportsExecutionMode(MODE_BATCH_NO_OPDATA));
+        assertTrue(bebe.supportsExecutionMode(MODE_BATCH_WITH_OPDATA));
     }
 
     /// @dev When the executor is called by itself (7702 self-call), execute()
@@ -120,5 +134,71 @@ contract BasicEOABatchExecutorTest is Test {
 
         assertEq(probeA.lastValue(), 0.25 ether);
         assertEq(address(probeA).balance, 0.25 ether);
+    }
+
+    /// @dev address(0) in Call.to is rewritten to address(this) by ERC-7821.
+    function test_ZeroTo_MeansSelf() public {
+        // Encode a self-call via to=address(0). Use empty data (no-op) so it doesn't revert.
+        ERC7821.Call[] memory calls = new ERC7821.Call[](1);
+        calls[0] = ERC7821.Call({to: address(0), value: 0, data: ""});
+
+        vm.prank(address(bebe));
+        bebe.execute(MODE_BATCH_NO_OPDATA, abi.encode(calls));
+        // Success without revert is enough: zero `to` was rewritten and called.
+    }
+
+    // ─── ERC-1271 isValidSignature ─────────────────────────────────────────
+
+    /// @dev Valid ECDSA signature from the account itself returns magic value.
+    /// Under EIP-7702, address(this) is the EOA, so we etch BEBE code onto the EOA.
+    function test_IsValidSignature_ValidEOA() public {
+        bytes memory runtime = address(bebe).code;
+        vm.etch(eoa, runtime);
+
+        bytes32 hash = keccak256("bebe-sign");
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(eoaKey, hash);
+        bytes memory sig = abi.encodePacked(r, s, v);
+
+        bytes4 result = BasicEOABatchExecutor(payable(eoa)).isValidSignature(hash, sig);
+        assertEq(result, ERC1271_MAGIC);
+    }
+
+    /// @dev Signature from a different key must not validate.
+    function test_IsValidSignature_WrongSigner() public {
+        bytes memory runtime = address(bebe).code;
+        vm.etch(eoa, runtime);
+
+        (, uint256 wrongKey) = makeAddrAndKey("wrong");
+        bytes32 hash = keccak256("bebe-sign");
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(wrongKey, hash);
+        bytes memory sig = abi.encodePacked(r, s, v);
+
+        bytes4 result = BasicEOABatchExecutor(payable(eoa)).isValidSignature(hash, sig);
+        assertEq(result, ERC1271_FAIL);
+    }
+
+    /// @dev Simulated 7702: EOA code = BEBE, self-call execute multi-target.
+    function test_EIP7702_EtchAndSelfExecute() public {
+        bytes memory runtime = address(bebe).code;
+        vm.etch(eoa, runtime);
+        vm.deal(eoa, 1 ether);
+
+        ERC7821.Call[] memory calls = new ERC7821.Call[](1);
+        calls[0] = ERC7821.Call({
+            to: address(probeA),
+            value: 0.1 ether,
+            data: abi.encodeCall(CallerProbe.ping, (hex"ef"))
+        });
+
+        vm.prank(eoa);
+        BasicEOABatchExecutor(payable(eoa)).execute(MODE_BATCH_NO_OPDATA, abi.encode(calls));
+
+        assertEq(probeA.lastCaller(), eoa);
+        assertEq(probeA.lastValue(), 0.1 ether);
+        assertEq(probeA.lastData(), hex"ef");
+    }
+
+    function test_CanonicalAddress_Constant() public pure {
+        assertEq(CANONICAL_BEBE, 0x00000000BEBEDB7C30ee418158e26E31a5A8f3E2);
     }
 }

@@ -4,6 +4,24 @@ Solidity smart contracts for MEV searcher execution on Arbitrum using Foundry.
 
 ## Contracts
 
+### BasicEOABatchExecutor.sol (BEBE)
+
+Stateless ERC-7821 batch executor for EOAs to delegate to via EIP-7702.
+
+- **What**: ERC-7821 `execute(mode, executionData)` + ERC-1271 `isValidSignature` (`ecrecover` against the EOA).
+- **Why**: After EIP-7702 sets code on an EOA, some contracts skip raw `ecrecover` when code is present; ERC-1271 keeps ECDSA validation working.
+- **Auth**: Empty `opData` requires `msg.sender == address(this)` (7702 self-call).
+- **Canonical address** (all networks): `0x00000000BEBEDB7C30ee418158e26E31a5A8f3E2`
+- **Refs**: [vectorized/bebe](https://github.com/vectorized/bebe), Solady `ERC7821`
+
+```bash
+# Prefer canonical address in .env — no deploy needed where CREATE2 exists:
+BATCH_EXECUTOR_ADDRESS=0x00000000BEBEDB7C30ee418158e26E31a5A8f3E2
+
+# Self-deploy only if needed:
+forge script script/DeployBatchExecutor.s.sol --rpc-url arbitrum --broadcast --verify
+```
+
 ### SniperSearcher.sol
 
 Core MEV searcher contract that:

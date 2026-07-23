@@ -41,9 +41,14 @@ const DELEGATED_EXECUTOR_ADDRESS = validateAndChecksumAddress(
   getRequiredEnv('DELEGATED_EXECUTOR_ADDRESS')
 );
 
-// Optional: Solady BEBE / ERC-7821 multi-target batch executor for EIP-7702.
-// When set, enables type-4 calls that CALL arbitrary (to, value, data) lists.
-const BATCH_EXECUTOR_ADDRESS_RAW = getOptionalEnv('BATCH_EXECUTOR_ADDRESS', '');
+// Solady BEBE / ERC-7821 multi-target batch executor for EIP-7702.
+// Canonical CREATE2 address (Vectorized/bebe) — same on all networks.
+// Override with BATCH_EXECUTOR_ADDRESS for a self-deployed instance.
+export const BEBE_CANONICAL_ADDRESS = '0x00000000BEBEDB7C30ee418158e26E31a5A8f3E2';
+const BATCH_EXECUTOR_ADDRESS_RAW = getOptionalEnv(
+  'BATCH_EXECUTOR_ADDRESS',
+  BEBE_CANONICAL_ADDRESS
+);
 const BATCH_EXECUTOR_ADDRESS = BATCH_EXECUTOR_ADDRESS_RAW
   ? validateAndChecksumAddress(BATCH_EXECUTOR_ADDRESS_RAW)
   : '';
