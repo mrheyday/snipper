@@ -1,205 +1,153 @@
-# DelegatedExecutor Calldata Specification
+# Production Calldata Reference (Arbitrum One)
 
-## Contract Address
-`0x1258AcDc63a0A8dc617c69d51470631cd59daC6A` (local deployment)
+**Updated:** 2026-07-23  
+**Chain ID:** 42161  
+**Owner / deployer:** `0x00000001386687D89e6A36aE01C5e5F75acF61Af`
 
-## Functions Available for EIP-7702 Delegation
+## Deployed addresses
 
-### 1. executeSwap() - Single Swap
-```solidity
+| Contract | Address |
+|----------|---------|
+| SniperSearcher | `0xAC7465949D3178C9F13d629c6417b2a02D50DdC8` |
+| FlashLoanReceiver | `0xdce71b4f28dcc5686B3B4e8790bD6051345A89b8` |
+| DelegatedExecutor | `0xc7a5B0873CB174A78017A66b541B24be64fBAde4` |
+| BEBE (canonical) | `0x00000000BEBEDB7C30ee418158e26E31a5A8f3E2` |
+| SwapRouter02 | `0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45` |
+| Aave V3 Pool | `0x794a61358D6845594F94dc1DB02A252b5b4814aD` |
+
+Selectors below are from the verified Solidity sources (solc 0.8.36 / via-ir).
+
+---
+
+## SniperSearcher
+
+### `executeSwap(address,uint256,bytes,uint256)` → `0xdd824660`
+
+```
 function executeSwap(
-    address tokenIn,
-    uint256 amountIn,
-    bytes calldata path,
-    uint256 minAmountOut,
-    uint256 deadline
+  address tokenIn,
+  uint256 amountIn,
+  bytes path,
+  uint256 minAmountOut
 ) external returns (uint256 amountOut)
 ```
 
-**Calldata Structure:**
+Caller must be `owner` or `allowedExecutors`. Pulls `tokenIn` via `transferFrom`, swaps on SwapRouter02, returns `tokenOut` to caller.
+
+### `executeSwapWithDeadline(address,uint256,bytes,uint256,uint256)` → `0x2a6ea44a`
+
+Same as above with explicit `deadline` (unix seconds).
+
+### `allowExecutor(address)` → `0xb1b05f2a`
+
+Owner-only. FlashLoanReceiver must be allowlisted (already set at deploy).
+
+---
+
+## FlashLoanReceiver
+
+### `initiateFlashLoan(address,uint256,bytes,uint256)` → `0xd4c4ca9b`
+
 ```
-Function Selector: 0x107db2c4  // executeSwap(address,uint256,bytes,uint256,uint256)
-Parameter Encoding:
-  tokenIn           (address)  - Input token address (EIP-55 checksummed)
-  amountIn          (uint256)  - Amount of input tokens
-  path              (bytes)    - Uniswap V3 swap path (encoded)
-  minAmountOut      (uint256)  - Minimum acceptable output
-  deadline          (uint256)  - Block timestamp deadline
+function initiateFlashLoan(
+  address token,        // borrow / repay asset
+  uint256 amount,
+  bytes swapPath,       // Uni V3 multi-hop; MUST end in `token` (min 66 bytes / 2 hops)
+  uint256 minAmountOut  // must be >= amount + premium (live FLASHLOAN_PREMIUM_TOTAL)
+) external onlyOwner
 ```
 
-**Example Swap Calldata:**
-```
-0x414bf389
-  000000000000000000000000af88d065e77c8cc2239327c5edb3a432268e5831  // USDC
-  0000000000000000000000000000000000000000000000000000000000989680  // 10M (10 USDC)
-  00000000000000000000000000000000000000000000000000000000000000a0  // path offset
-  0000000000000000000000000000000000000000000000000de0b6b3a7640000  // minAmountOut
-  000000000000000000000000000000000000000000000000000000006779f1a0  // deadline
-  0000000000000000000000000000000000000000000000000000000000000026  // path length (38 bytes)
-  af88d065e77c8cc2239327c5edb3a432268e583100000bb8942590194fb1b5   // path data
-  800026748c07dd0000000000000000000000000000                        // (continues)
+**Example** (WETH round-trip WETH→USDC→WETH, 0.3% fees, 1 WETH, minOut ~1.0005 WETH):
+
+```bash
+cast calldata "initiateFlashLoan(address,uint256,bytes,uint256)" \
+  0x82aF49447D8a07e3bd95BD0d56f35241523fBab1 \
+  1000000000000000000 \
+  0x82af49447d8a07e3bd95bd0d56f35241523fbab1000bb8af88d065e77c8cc2239327c5edb3a432268e5831000bb882af49447d8a07e3bd95bd0d56f35241523fbab1 \
+  1000500000000000000
 ```
 
-### 2. executeBatchSwaps() - Batch Execution
-```solidity
-function executeBatchSwaps(
-    tuple(
-        address tokenIn,
-        uint256 amountIn,
-        bytes path,
-        uint256 minAmountOut
-    )[] swaps,
-    uint256 deadline
-) external returns (uint256[] amountOuts)
+Selector prefix: `0xd4c4ca9b…`
+
+### `executeOperation(...)` → `0x1b11d0ff`
+
+Aave Pool callback only (`msg.sender == lendingPool`, `initiator == address(this)`).
+
+### `transferOwnership(address)` → `0xf2fde38b`
+
+### `flashLoanPremiumBps()` → `0x56d8940f`
+
+---
+
+## DelegatedExecutor (EIP-7702 single-target Uni)
+
+### `executeSwap(address,uint256,bytes,uint256,uint256)` → `0x107db2c4`
+
 ```
-
-**Use Cases:**
-- Execute multiple swaps in single transaction
-- Atomically bundle multiple opportunities
-- Reduce transaction overhead
-
-### 3. executeSwapWithCallback() - Callback Integration
-```solidity
-function executeSwapWithCallback(
-    address tokenIn,
-    uint256 amountIn,
-    bytes calldata path,
-    uint256 minAmountOut,
-    uint256 deadline,
-    bytes calldata callbackData
+function executeSwap(
+  address tokenIn,
+  uint256 amountIn,
+  bytes path,
+  uint256 minAmountOut,
+  uint256 deadline
 ) external returns (uint256 amountOut)
 ```
 
-## EIP-7702 Authorization Encoding
+Under 7702: `msg.sender == address(this)` (EOA self-call). External allowlisted EOAs get `tokenOut` transferred out.
 
-When delegating to DelegatedExecutor via EIP-7702:
+**Type-4 pattern:** authorize EOA → this contract, `to = EOA`, `data = executeSwap(...)`.
 
-```
-Authorization Structure:
-├─ type: 0x04 (EIP-7702)
-├─ authorizationList[]
-│  ├─ address: 0x1258AcDc63a0A8dc617c69d51470631cd59daC6A (delegatee)
-│  ├─ nonce: current_nonce
-│  ├─ r: signature_r
-│  ├─ s: signature_s
-│  ├─ yParity: v_parity
-└─ callData: <delegatee function call>
-```
+### `executeBatchSwaps((address,uint256,bytes,uint256)[],uint256)` → `0x1435c9ac`
 
-## Gas Costs (Estimated)
+### `executeSwapWithCallback(...)` — callback data must be empty (`CallbackDisabled`)
 
-| Operation | Gas | Notes |
-|-----------|-----|-------|
-| executeSwap() | ~100k | Single swap execution |
-| executeBatchSwaps(2) | ~150k | Two swaps batched |
-| executeBatchSwaps(3) | ~190k | Three swaps batched |
-| With approval | +20k | SafeTransferFrom cost |
-| With WETH wrap | +15k | Native ETH wrapping |
+---
 
-## Security Properties
+## BEBE BasicEOABatchExecutor (multi-target)
 
-✅ **Atomic Execution**: All-or-nothing semantics via delegated call  
-✅ **Signature Required**: EOA must sign authorization  
-✅ **Revert Safe**: Failed swaps revert entire transaction  
-⚠️ **Has storage**: owner / allowedEOAs mapping (not fully stateless)  
-✅ **Gas Efficient**: Inline execution, no DELEGATECALL overhead  
+Address: `0x00000000BEBEDB7C30ee418158e26E31a5A8f3E2`
 
-## Integration with EIP-7702
+### `execute(bytes32,bytes)` → `0xe9ae5c53`
+
+ERC-7821 mode (batch, no opData):
 
 ```
-1. EOA generates authorization signature
-   hash = keccak256(0x05 || chainId || delegatee || nonce)
-   sig = sign(hash)
-
-2. Construct delegated call
-   target: DelegatedExecutor
-   callData: executeSwap(...) encoding
-
-3. Bundle in EIP-7702 transaction
-   authorizationList: [{ delegatee, nonce, r, s, yParity }]
-   to: (any address, often delegatee or swap recipient)
-   data: (delegated call data)
-
-4. Send transaction
-   All calls execute under delegatee context
-   EOA retains control via authorization
-
-5. Calldata Verification
-   Can be decoded and validated before signing
+mode = 0x0100000000000000000000000000000000000000000000000000000000000000
+executionData = abi.encode(Call[]{(to, value, data), ...})
 ```
 
-## Calldata Decoding Example
+Auth: empty opData requires `msg.sender == address(this)` (7702 self-call).
 
-```solidity
-// Decode executeSwap calldata
-function decodeSwapCall(bytes calldata data) 
-  external pure returns (
-    address tokenIn,
-    uint256 amountIn,
-    bytes memory path,
-    uint256 minAmountOut,
-    uint256 deadline
-  ) 
-{
-  // Skip 4-byte selector
-  (tokenIn, amountIn, path, minAmountOut, deadline) = 
-    abi.decode(data[4:], (address, uint256, bytes, uint256, uint256));
-}
-```
+**Example: EOA calls FlashLoanReceiver.initiateFlashLoan via BEBE**
 
-## Network Deployment Status
+1. Auth list → BEBE  
+2. `to = EOA`, `data = execute(mode, abi.encode([{ to: FlashLoanReceiver, value: 0, data: initiateFlashLoan_calldata }]))`
 
-| Network | Status | Address |
-|---------|--------|---------|
-| Anvil Local | ✅ Deployed | 0x1258AcDc63a0A8dc617c69d51470631cd59daC6A |
-| Arbitrum Sepolia | 🟡 Ready | (awaiting deployment) |
-| Arbitrum Mainnet | 🟡 Ready | (awaiting deployment) |
+### `isValidSignature(bytes32,bytes)` → `0x1626ba7e`
 
-## Next Steps
+ERC-1271: `ecrecover == address(this)` → magic `0x1626ba7e`, else `0xffffffff`.
 
-1. ✅ Local deployment verified on anvil
-2. 🔲 Deploy to Arbitrum Sepolia (testnet)
-3. 🔲 Test with small swap amounts ($10-50)
-4. 🔲 Verify gas costs vs profits
-5. 🔲 Deploy to Arbitrum Mainnet (production)
+### `supportsExecutionMode(bytes32)` → `0xd03c7914`
 
-## Related Standards
+---
 
-- **EIP-7702**: Set EOA Account Code (https://eips.ethereum.org/EIPS/eip-7702)
-- **ERC-7821**: EOA Batch Executor (variant used by bebe)
-- **EIP-1559**: Dynamic fee market (Arbitrum integration)
-- **Uniswap V3**: SwapRouter02 interface (execution target)
-
-
-
-## Router wiring (production-critical)
-
-DelegatedExecutor and SniperSearcher call Uniswap V3 **SwapRouter02**:
-
-- `exactInput((bytes path, address recipient, uint256 amountIn, uint256 amountOutMinimum))`
-- selector: `0xb858183f`
-
-Do **not** use positional `exactInput(bytes,address,uint256,uint256)` (`0x11b69c46`) — wrong ABI.
-
-### Flash path wiring
+## Path encoding (Uniswap V3)
 
 ```
-EOA --type4--> BEBE.execute([CALL FlashLoanReceiver.initiateFlashLoan])
-  --> Aave.flashLoanSimple(receiver=Flash)
-  --> Flash.executeOperation
-      --> approve SniperSearcher
-      --> SniperSearcher.executeSwap  (must be allowExecutor'd at deploy)
-      --> path MUST round-trip to borrow asset
-      --> approve Aave for amount+premium
+tokenIn (20) || fee (3) || tokenMid (20) || fee (3) || tokenOut (20)
+# flash repay: tokenOut MUST equal borrow asset; min length 66 bytes (2 hops)
 ```
 
-### Selector cheat-sheet
+Fee `3000` = `0x000bb8`, fee `500` = `0x0001f4`.
 
-| Function | Selector |
-|----------|----------|
-| SniperSearcher.executeSwap(address,uint256,bytes,uint256) | 0xdd824660 |
-| SniperSearcher.executeSwapWithDeadline(...,uint256) | (see ABI) |
-| FlashLoanReceiver.initiateFlashLoan(...) | 0xd4c4ca9b |
-| BEBE / ERC7821 execute(bytes32,bytes) | 0xe9ae5c53 |
-| SwapRouter02 exactInput(ExactInputParams) | 0xb858183f |
-| DelegatedExecutor.executeSwap(...,deadline) | 0x107db2c4 |
+---
+
+## TypeScript encoding helpers
+
+Hot path uses:
+
+- `src/executor.ts` → `SNIPER_SEARCHER_ABI` / `executeSwapWithDeadline`
+- `src/flashExecutor.ts` → `FLASH_LOAN_RECEIVER_ABI` / `initiateFlashLoan` (`0xd4c4ca9b`)
+- `src/eip7702.ts` → DelegatedExecutor `0x107db2c4` or BEBE `0xe9ae5c53` + `encodeBatchExecute`
+
+ABIs: `src/contractABIs.ts` (regenerated from Foundry `out/`).

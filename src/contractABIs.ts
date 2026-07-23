@@ -2,6 +2,8 @@
  * Smart Contract ABIs
  * Auto-generated from Foundry build artifacts
  * Generated on: 2026-07-23
+ * Deploy: Arbitrum One — SniperSearcher 0xAC7465949D3178C9F13d629c6417b2a02D50DdC8
+ * Includes: SniperSearcher, FlashLoanReceiver, DelegatedExecutor, BEBE BasicEOABatchExecutor
  */
 
 export const SNIPER_SEARCHER_ABI = [
@@ -722,6 +724,19 @@ export const FLASH_LOAN_RECEIVER_ABI = [
   },
   {
     "type": "function",
+    "name": "transferOwnership",
+    "inputs": [
+      {
+        "name": "newOwner",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "withdraw",
     "inputs": [
       {
@@ -793,6 +808,25 @@ export const FLASH_LOAN_RECEIVER_ABI = [
     "anonymous": false
   },
   {
+    "type": "event",
+    "name": "OwnershipTransferred",
+    "inputs": [
+      {
+        "name": "previousOwner",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "newOwner",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
     "type": "error",
     "name": "InsufficientRepayment",
     "inputs": [
@@ -815,6 +849,22 @@ export const FLASH_LOAN_RECEIVER_ABI = [
   },
   {
     "type": "error",
+    "name": "MinAmountOutTooLow",
+    "inputs": [
+      {
+        "name": "minAmountOut",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "minRepay",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
     "name": "PathMustEndInBorrowAsset",
     "inputs": [
       {
@@ -831,7 +881,17 @@ export const FLASH_LOAN_RECEIVER_ABI = [
   },
   {
     "type": "error",
+    "name": "Reentrancy",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "Unauthorized",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ZeroAddress",
     "inputs": []
   }
 ] as const;
@@ -1060,6 +1120,47 @@ export const DELEGATED_EXECUTOR_ABI = [
   },
   {
     "type": "function",
+    "name": "rescueETH",
+    "inputs": [
+      {
+        "name": "to",
+        "type": "address",
+        "internalType": "address payable"
+      },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "rescueToken",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "to",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "revokeEOA",
     "inputs": [
       {
@@ -1198,6 +1299,11 @@ export const DELEGATED_EXECUTOR_ABI = [
         "internalType": "address"
       }
     ]
+  },
+  {
+    "type": "error",
+    "name": "ZeroAddress",
+    "inputs": []
   }
 ] as const;
 

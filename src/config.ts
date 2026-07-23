@@ -29,22 +29,39 @@ const PERMIT2_ADDRESS = validateAndChecksumAddress(
   getOptionalEnv('PERMIT2_ADDRESS', '0x000000000022D473030F116dDEE9F6B43aC78BA3')
 );
 
+/**
+ * Arbitrum One production deploy (2026-07-23) — verified on Arbiscan.
+ * Override via env for forks / redeploys.
+ */
+export const ARBITRUM_DEPLOY = {
+  chainId: 42161,
+  owner: '0x00000001386687D89e6A36aE01C5e5F75acF61Af',
+  sniperSearcher: '0xAC7465949D3178C9F13d629c6417b2a02D50DdC8',
+  flashLoanReceiver: '0xdce71b4f28dcc5686B3B4e8790bD6051345A89b8',
+  delegatedExecutor: '0xc7a5B0873CB174A78017A66b541B24be64fBAde4',
+  /** Vectorized BEBE CREATE2 (canonical multi-target batch). */
+  bebe: '0x00000000BEBEDB7C30ee418158e26E31a5A8f3E2',
+  swapRouter02: '0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45',
+  aaveV3Pool: '0x794a61358D6845594F94dc1DB02A252b5b4814aD',
+  minAmountBitLength: 0,
+} as const;
+
 const SNIPER_SEARCHER_ADDRESS = validateAndChecksumAddress(
-  getRequiredEnv('SNIPER_SEARCHER_ADDRESS')
+  getOptionalEnv('SNIPER_SEARCHER_ADDRESS', ARBITRUM_DEPLOY.sniperSearcher)
 );
 
 const FLASH_LOAN_RECEIVER_ADDRESS = validateAndChecksumAddress(
-  getRequiredEnv('FLASH_LOAN_RECEIVER_ADDRESS')
+  getOptionalEnv('FLASH_LOAN_RECEIVER_ADDRESS', ARBITRUM_DEPLOY.flashLoanReceiver)
 );
 
 const DELEGATED_EXECUTOR_ADDRESS = validateAndChecksumAddress(
-  getRequiredEnv('DELEGATED_EXECUTOR_ADDRESS')
+  getOptionalEnv('DELEGATED_EXECUTOR_ADDRESS', ARBITRUM_DEPLOY.delegatedExecutor)
 );
 
 // Solady BEBE / ERC-7821 multi-target batch executor for EIP-7702.
 // Canonical CREATE2 address (Vectorized/bebe) — same on all networks.
 // Override with BATCH_EXECUTOR_ADDRESS for a self-deployed instance.
-export const BEBE_CANONICAL_ADDRESS = '0x00000000BEBEDB7C30ee418158e26E31a5A8f3E2';
+export const BEBE_CANONICAL_ADDRESS = ARBITRUM_DEPLOY.bebe;
 const BATCH_EXECUTOR_ADDRESS_RAW = getOptionalEnv(
   'BATCH_EXECUTOR_ADDRESS',
   BEBE_CANONICAL_ADDRESS

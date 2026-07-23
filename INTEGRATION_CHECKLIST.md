@@ -16,25 +16,21 @@ BEBE_ADDRESS=0x00000000BEBEDB7C30ee418158e26E31a5A8f3E2
 # It performs ecrecover checks against the delegating EOA
 ```
 
-### Step 2: Update .env
+### Step 2: Update .env (Arbitrum One production 2026-07-23)
 ```env
-# Before: Self-deployed
-# DELEGATED_EXECUTOR_ADDRESS=0x... # your deployment
+# Core contracts (verified on Arbiscan)
+SNIPER_SEARCHER_ADDRESS=0xAC7465949D3178C9F13d629c6417b2a02D50DdC8
+FLASH_LOAN_RECEIVER_ADDRESS=0xdce71b4f28dcc5686B3B4e8790bD6051345A89b8
+DELEGATED_EXECUTOR_ADDRESS=0xc7a5B0873CB174A78017A66b541B24be64fBAde4
 
-# After: Pre-deployed bebe (canonical address, all networks)
-DELEGATED_EXECUTOR_ADDRESS=0x00000000BEBEDB7C30ee418158e26E31a5A8f3E2
-USE_EXTERNAL_DELEGATEE=true
+# Multi-target EIP-7702 batch executor (canonical BEBE — not the same as DelegatedExecutor)
+BATCH_EXECUTOR_ADDRESS=0x00000000BEBEDB7C30ee418158e26E31a5A8f3E2
 ```
 
-### Step 3: No Code Changes Needed
-The `EIP7702DelegatedExecutor` class already works with bebe:
-```typescript
-// Same code, different address
-const delegatee = new EIP7702DelegatedExecutor(
-  process.env.DELEGATED_EXECUTOR_ADDRESS, // Now points to bebe
-  42161
-);
-```
+### Step 3: Wiring
+- **DelegatedExecutor** → Uni-only swaps under 7702 (`executeSwap` selector `0x107db2c4`)
+- **BEBE** → multi-target `execute(bytes32,bytes)` selector `0xe9ae5c53` via `BatchEOAExecutor` / `encodeBatchExecute`
+- Do not set `DELEGATED_EXECUTOR_ADDRESS` to BEBE if you need the Uniswap-only path
 
 ### Step 4: Verify Integration
 ```bash
