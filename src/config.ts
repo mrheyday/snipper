@@ -19,12 +19,14 @@ validatePrivateKey(WALLET_PRIVATE_KEY);
 
 const SWAP_ROUTER_ADDRESS = validateAndChecksumAddress(getRequiredEnv('SWAP_ROUTER_ADDRESS'));
 
+// Uniswap V3 QuoterV2 on Arbitrum One (note: ends in 7530..., not mainnet 7540...)
 const QUOTER_ADDRESS = validateAndChecksumAddress(
   getOptionalEnv('QUOTER_ADDRESS', '0x61fFE014bA17989E743c5F6cB21bF9697530B21e')
 );
 
+// Canonical Permit2 CREATE2 address (Arbitrum + most EVMs)
 const PERMIT2_ADDRESS = validateAndChecksumAddress(
-  getOptionalEnv('PERMIT2_ADDRESS', '0x000000000022D473030f116DfC393aC15502d30e')
+  getOptionalEnv('PERMIT2_ADDRESS', '0x000000000022D473030F116dDEE9F6B43aC78BA3')
 );
 
 const SNIPER_SEARCHER_ADDRESS = validateAndChecksumAddress(

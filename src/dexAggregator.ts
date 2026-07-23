@@ -31,7 +31,7 @@ export const ARBITRUM_DEX_PROTOCOLS: DEXProtocolConfig[] = [
     name: 'Uniswap V3',
     dexType: DEXType.UNISWAP_V3,
     routerAddress: '0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45',
-    quoterAddress: QUOTER_ADDRESS || '0x61fFe014bA17989E743c5F6cB21bF9697540B21e',
+    quoterAddress: QUOTER_ADDRESS || '0x61fFE014bA17989E743c5F6cB21bF9697530B21e',
     supportedFeeTiers: [100, 500, 3000, 10000],
   },
   {

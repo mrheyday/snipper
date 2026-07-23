@@ -64,3 +64,5 @@ pnpm-lock.yaml
 *.o
 *.a
 *.so
+
+.env.bak*
