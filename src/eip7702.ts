@@ -1,338 +1,648 @@
-import { BigNumber, ethers } from 'ethers';
-import { signer } from './config';
+import { BigNumber, ethers, Wallet } from 'ethers';
+import { provider, signer, CHAIN_ID } from './config';
+import { Logger } from './logger';
+import { validateAndChecksumAddress } from './validation';
 
-/**
- * EIP-7702: Set EOA Account Code
- * Allows EOA to delegate to contract code for single transaction
- * No pre-deployed contract needed; atomic execution
- */
+const logger = new Logger('EIP7702');
 
-interface Authorization {
-  chainId: BigNumber;
-  address: string; // Contract to delegate to
-  nonce: BigNumber;
-  yParity: number; // 0 or 1
+/** EIP-7702 magic byte prepended to the authorization RLP payload before keccak. */
+const AUTH_MAGIC = 0x05;
+/** EIP-7702 / SetCode transaction type byte. */
+const TX_TYPE_SET_CODE = 0x04;
+/** Delegation designator prefix: 0xef0100 || address (23 bytes total). */
+const DELEGATION_DESIGNATOR_PREFIX = '0xef0100';
+const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+
+const DELEGATED_EXECUTOR_IFACE = new ethers.utils.Interface([
+  'function executeSwap(address tokenIn, uint256 amountIn, bytes calldata path, uint256 minAmountOut, uint256 deadline) external returns (uint256)',
+  'function executeSwapWithCallback(address tokenIn, uint256 amountIn, bytes calldata path, uint256 minAmountOut, uint256 deadline, bytes calldata callbackData) external returns (uint256)',
+  'function executeBatchSwaps(tuple(address tokenIn,uint256 amountIn,bytes path,uint256 minAmountOut)[] swaps, uint256 deadline) external returns (uint256[])',
+  'function allowEOA(address eoa) external',
+  'function allowedEOAs(address eoa) view returns (bool)',
+]);
+
+export interface Authorization {
+  chainId: number;
+  address: string;
+  nonce: number;
+  yParity: number;
   r: string;
   s: string;
 }
 
-interface DelegatedSwapParams {
+export interface DelegatedSwapParams {
   tokenIn: string;
   amountIn: BigNumber;
-  path: Buffer;
+  path: Buffer | string;
   minAmountOut: BigNumber;
   deadline: number;
+  gasLimit?: BigNumber;
+  /** If true, clear EOA delegation after the swap with a follow-up type-4. */
+  clearAfter?: boolean;
 }
 
-interface DelegatedSwapResult {
+export interface DelegatedSwapResult {
   success: boolean;
   txHash?: string;
   amountOut?: BigNumber;
   error?: string;
   gasUsed?: BigNumber;
+  authorization?: Authorization;
+  delegationCode?: string;
 }
 
-const DELEGATED_EXECUTOR_ABI = [
-  'function executeSwap(address tokenIn, uint256 amountIn, bytes calldata path, uint256 minAmountOut, uint256 deadline) external returns (uint256)',
-  'function executeSwapWithCallback(address tokenIn, uint256 amountIn, bytes calldata path, uint256 minAmountOut, uint256 deadline, bytes calldata callbackData) external returns (uint256)',
-  'function executeBatchSwaps(tuple(address,uint256,bytes,uint256)[] swaps, uint256 deadline) external returns (uint256[])',
-];
+export interface DelegationStatus {
+  eoa: string;
+  hasCode: boolean;
+  isDelegated: boolean;
+  delegate: string | null;
+  code: string;
+  nonce: number;
+}
+
+// ---------------------------------------------------------------------------
+// Minimal RLP encode (bytes / uint / address / list) for type-4 + auth
+// ---------------------------------------------------------------------------
+
+function stripHexPrefix(hex: string): string {
+  return hex.startsWith('0x') || hex.startsWith('0X') ? hex.slice(2) : hex;
+}
+
+function hexToBuf(hex: string): Buffer {
+  const h = stripHexPrefix(hex);
+  if (h.length === 0) return Buffer.alloc(0);
+  const even = h.length % 2 === 0 ? h : '0' + h;
+  return Buffer.from(even, 'hex');
+}
+
+function bufToHex(buf: Buffer): string {
+  return '0x' + buf.toString('hex');
+}
+
+function rlpEncodeBytes(input: Buffer): Buffer {
+  if (input.length === 1 && input[0] < 0x80) {
+    return input;
+  }
+  if (input.length <= 55) {
+    return Buffer.concat([Buffer.from([0x80 + input.length]), input]);
+  }
+  const lenHex = input.length.toString(16);
+  const lenBytes = Buffer.from(lenHex.length % 2 === 0 ? lenHex : '0' + lenHex, 'hex');
+  return Buffer.concat([Buffer.from([0xb7 + lenBytes.length]), lenBytes, input]);
+}
+
+function rlpEncodeUint(value: ethers.BigNumberish): Buffer {
+  const bn = BigNumber.from(value);
+  if (bn.isZero()) return rlpEncodeBytes(Buffer.alloc(0));
+  let hex = bn.toHexString().slice(2);
+  if (hex.length % 2) hex = '0' + hex;
+  return rlpEncodeBytes(Buffer.from(hex, 'hex'));
+}
+
+function rlpEncodeAddress(addr: string): Buffer {
+  const clean = ethers.utils.getAddress(addr);
+  return rlpEncodeBytes(hexToBuf(clean));
+}
+
+function rlpEncodeHash32(hex: string): Buffer {
+  const h = stripHexPrefix(hex).padStart(64, '0');
+  return rlpEncodeBytes(Buffer.from(h, 'hex'));
+}
+
+function rlpEncodeList(items: Buffer[]): Buffer {
+  const payload = Buffer.concat(items);
+  if (payload.length <= 55) {
+    return Buffer.concat([Buffer.from([0xc0 + payload.length]), payload]);
+  }
+  const lenHex = payload.length.toString(16);
+  const lenBytes = Buffer.from(lenHex.length % 2 === 0 ? lenHex : '0' + lenHex, 'hex');
+  return Buffer.concat([Buffer.from([0xf7 + lenBytes.length]), lenBytes, payload]);
+}
+
+// ---------------------------------------------------------------------------
+// Authorization (EIP-7702 signing)
+// ---------------------------------------------------------------------------
 
 /**
- * EIP-7702 Authorizer
- * Signs authorization data for EOA code delegation
+ * Spec-compliant authorization digest:
+ *   keccak256( 0x05 || rlp([chain_id, address, nonce]) )
+ *
+ * Do NOT use solidityPack, and do NOT personal_sign / signMessage (EIP-191).
  */
+export function authorizationDigest(
+  chainId: number,
+  delegate: string,
+  nonce: number
+): string {
+  const rlpAuth = rlpEncodeList([
+    rlpEncodeUint(chainId),
+    rlpEncodeAddress(delegate),
+    rlpEncodeUint(nonce),
+  ]);
+  const payload = Buffer.concat([Buffer.from([AUTH_MAGIC]), rlpAuth]);
+  return ethers.utils.keccak256(payload);
+}
+
+/**
+ * Sign an EIP-7702 authorization with a raw secp256k1 signature over the
+ * authorization digest (no EIP-191 prefix).
+ */
+export async function signAuthorization(
+  authority: Wallet,
+  delegate: string,
+  opts?: { chainId?: number; nonce?: number }
+): Promise<Authorization> {
+  const chainId = opts?.chainId ?? CHAIN_ID;
+  const addr = await authority.getAddress();
+  const nonce =
+    opts?.nonce ?? (await provider.getTransactionCount(addr, 'pending'));
+  const delegateCs = validateAndChecksumAddress(delegate);
+
+  const digest = authorizationDigest(chainId, delegateCs, nonce);
+  // Raw ECDSA over the 32-byte digest — NOT signMessage.
+  const sig = authority._signingKey().signDigest(digest);
+
+  return {
+    chainId,
+    address: delegateCs,
+    nonce,
+    yParity: sig.v === 27 ? 0 : 1,
+    r: sig.r,
+    s: sig.s,
+  };
+}
+
+/** Authorize to the zero address to clear delegation. */
+export async function signClearAuthorization(
+  authority: Wallet,
+  opts?: { chainId?: number; nonce?: number }
+): Promise<Authorization> {
+  return signAuthorization(authority, ZERO_ADDRESS, opts);
+}
+
+// ---------------------------------------------------------------------------
+// Delegation designator helpers
+// ---------------------------------------------------------------------------
+
+export function isDelegationDesignator(code: string): boolean {
+  if (!code || code === '0x') return false;
+  const c = code.toLowerCase();
+  return c.startsWith(DELEGATION_DESIGNATOR_PREFIX) && c.length === 2 + 6 + 40;
+}
+
+export function parseDelegate(code: string): string | null {
+  if (!isDelegationDesignator(code)) return null;
+  return ethers.utils.getAddress('0x' + code.slice(8));
+}
+
+export async function getDelegationStatus(eoa: string): Promise<DelegationStatus> {
+  const address = validateAndChecksumAddress(eoa);
+  const [code, nonce] = await Promise.all([
+    provider.getCode(address),
+    provider.getTransactionCount(address, 'pending'),
+  ]);
+  const delegated = isDelegationDesignator(code);
+  return {
+    eoa: address,
+    hasCode: code !== '0x' && code !== '0x0',
+    isDelegated: delegated,
+    delegate: delegated ? parseDelegate(code) : null,
+    code,
+    nonce,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Type-4 (SetCode) transaction encode + send
+// ---------------------------------------------------------------------------
+
+export interface Type4TxFields {
+  chainId: number;
+  nonce: number;
+  maxPriorityFeePerGas: BigNumber;
+  maxFeePerGas: BigNumber;
+  gasLimit: BigNumber;
+  to: string | null;
+  value: BigNumber;
+  data: string;
+  accessList?: Array<{ address: string; storageKeys: string[] }>;
+  authorizationList: Authorization[];
+}
+
+function rlpEncodeAccessList(
+  list: Array<{ address: string; storageKeys: string[] }> = []
+): Buffer {
+  return rlpEncodeList(
+    list.map((entry) =>
+      rlpEncodeList([
+        rlpEncodeAddress(entry.address),
+        rlpEncodeList(entry.storageKeys.map((k) => rlpEncodeHash32(k))),
+      ])
+    )
+  );
+}
+
+function rlpEncodeAuthList(auths: Authorization[]): Buffer {
+  return rlpEncodeList(
+    auths.map((auth) =>
+      rlpEncodeList([
+        rlpEncodeUint(auth.chainId),
+        rlpEncodeAddress(auth.address),
+        rlpEncodeUint(auth.nonce),
+        rlpEncodeUint(auth.yParity),
+        rlpEncodeHash32(auth.r),
+        rlpEncodeHash32(auth.s),
+      ])
+    )
+  );
+}
+
+function encodeType4Payload(
+  fields: Type4TxFields,
+  sig?: { yParity: number; r: string; s: string }
+): Buffer {
+  const toItem =
+    fields.to === null || fields.to === undefined || fields.to === ''
+      ? rlpEncodeBytes(Buffer.alloc(0))
+      : rlpEncodeAddress(fields.to);
+
+  const items: Buffer[] = [
+    rlpEncodeUint(fields.chainId),
+    rlpEncodeUint(fields.nonce),
+    rlpEncodeUint(fields.maxPriorityFeePerGas),
+    rlpEncodeUint(fields.maxFeePerGas),
+    rlpEncodeUint(fields.gasLimit),
+    toItem,
+    rlpEncodeUint(fields.value),
+    rlpEncodeBytes(hexToBuf(fields.data || '0x')),
+    rlpEncodeAccessList(fields.accessList ?? []),
+    rlpEncodeAuthList(fields.authorizationList),
+  ];
+
+  if (sig) {
+    items.push(rlpEncodeUint(sig.yParity), rlpEncodeHash32(sig.r), rlpEncodeHash32(sig.s));
+  }
+
+  return Buffer.concat([Buffer.from([TX_TYPE_SET_CODE]), rlpEncodeList(items)]);
+}
+
+export function hashType4Transaction(fields: Type4TxFields): string {
+  return ethers.utils.keccak256(encodeType4Payload(fields));
+}
+
+export function serializeSignedType4(
+  fields: Type4TxFields,
+  sig: { yParity: number; r: string; s: string }
+): string {
+  return bufToHex(encodeType4Payload(fields, sig));
+}
+
+/**
+ * Sign + send a type-4 SetCode transaction via eth_sendRawTransaction.
+ * ethers v5 has no native type-4 support, so this bypasses sendTransaction.
+ */
+export async function sendType4Transaction(
+  sender: Wallet,
+  fields: Omit<Type4TxFields, 'chainId' | 'nonce'> &
+    Partial<Pick<Type4TxFields, 'chainId' | 'nonce'>>
+): Promise<{ hash: string; raw: string; authorizationList: Authorization[] }> {
+  const from = await sender.getAddress();
+  const chainId = fields.chainId ?? CHAIN_ID;
+  const nonce = fields.nonce ?? (await provider.getTransactionCount(from, 'pending'));
+
+  const full: Type4TxFields = {
+    chainId,
+    nonce,
+    maxPriorityFeePerGas: fields.maxPriorityFeePerGas,
+    maxFeePerGas: fields.maxFeePerGas,
+    gasLimit: fields.gasLimit,
+    to: fields.to,
+    value: fields.value ?? BigNumber.from(0),
+    data: fields.data ?? '0x',
+    accessList: fields.accessList ?? [],
+    authorizationList: fields.authorizationList,
+  };
+
+  if (!full.authorizationList.length) {
+    throw new Error('type-4 transaction requires a non-empty authorizationList');
+  }
+
+  const digest = hashType4Transaction(full);
+  const sig = sender._signingKey().signDigest(digest);
+  const yParity = sig.v === 27 ? 0 : 1;
+  const raw = serializeSignedType4(full, { yParity, r: sig.r, s: sig.s });
+
+  logger.info('Sending type-4 tx (auth count=' + full.authorizationList.length + ')');
+  const hash: string = await provider.send('eth_sendRawTransaction', [raw]);
+  logger.info('type-4 sent: ' + hash);
+  return { hash, raw, authorizationList: full.authorizationList };
+}
+
+// ---------------------------------------------------------------------------
+// High-level executor used by ExecutionBridge
+// ---------------------------------------------------------------------------
+
 export class EIP7702Authorizer {
   private delegatedExecutor: string;
   private chainId: number;
+  private authority: Wallet;
 
-  constructor(delegatedExecutorAddress: string, chainId: number = 42161) {
-    this.delegatedExecutor = delegatedExecutorAddress;
+  constructor(
+    delegatedExecutorAddress: string,
+    chainId: number = CHAIN_ID,
+    authority: Wallet = signer as Wallet
+  ) {
+    this.delegatedExecutor = validateAndChecksumAddress(delegatedExecutorAddress);
     this.chainId = chainId;
+    this.authority = authority;
   }
 
-  /**
-   * Create EIP-7702 authorization structure
-   * Signs the delegation allowing EOA to execute contract code
-   */
-  async createAuthorization(): Promise<Authorization> {
-    const eoaAddress = await signer.getAddress();
-    const nonce = await signer.provider!.getTransactionCount(eoaAddress);
-
-    // EIP-7702 Authorization structure
-    // keccak256("EIP7702Authorization(uint256 chainId, address address, uint256 nonce)")
-    const authorizationHash = ethers.utils.keccak256(
-      ethers.utils.solidityPack(
-        ['uint256', 'address', 'uint256'],
-        [this.chainId, this.delegatedExecutor, nonce]
-      )
-    );
-
-    // Sign the authorization
-    const sig = await signer.signMessage(ethers.utils.arrayify(authorizationHash));
-    const signature = ethers.utils.splitSignature(sig);
-
-    return {
-      chainId: BigNumber.from(this.chainId),
-      address: this.delegatedExecutor,
-      nonce: BigNumber.from(nonce),
-      yParity: signature.v === 27 ? 0 : 1,
-      r: signature.r,
-      s: signature.s,
-    };
+  async createAuthorization(nonce?: number): Promise<Authorization> {
+    return signAuthorization(this.authority, this.delegatedExecutor, {
+      chainId: this.chainId,
+      nonce,
+    });
   }
 
-  /**
-   * Encode authorization for transaction
-   */
+  async createClearAuthorization(nonce?: number): Promise<Authorization> {
+    return signClearAuthorization(this.authority, { chainId: this.chainId, nonce });
+  }
+
+  /** Structured ABI encode of an auth tuple (debug / external tooling). */
   encodeAuthorization(auth: Authorization): string {
-    return ethers.utils.solidityPack(
+    return ethers.utils.defaultAbiCoder.encode(
       ['uint256', 'address', 'uint256', 'uint8', 'bytes32', 'bytes32'],
       [auth.chainId, auth.address, auth.nonce, auth.yParity, auth.r, auth.s]
     );
   }
 }
 
-/**
- * EIP-7702 Delegated Executor
- * Executes swaps through delegated EOA code
- */
 export class EIP7702Executor {
-  private delegatedExecutor: ethers.Contract;
+  private delegatedExecutor: string;
   private authorizer: EIP7702Authorizer;
+  private authority: Wallet;
+  private chainId: number;
 
-  constructor(delegatedExecutorAddress: string, chainId: number = 42161) {
-    this.delegatedExecutor = new ethers.Contract(
-      delegatedExecutorAddress,
-      DELEGATED_EXECUTOR_ABI,
-      signer
-    );
-    this.authorizer = new EIP7702Authorizer(delegatedExecutorAddress, chainId);
+  constructor(
+    delegatedExecutorAddress: string,
+    chainId: number = CHAIN_ID,
+    authority: Wallet = signer as Wallet
+  ) {
+    this.delegatedExecutor = validateAndChecksumAddress(delegatedExecutorAddress);
+    this.chainId = chainId;
+    this.authority = authority;
+    this.authorizer = new EIP7702Authorizer(this.delegatedExecutor, chainId, authority);
+  }
+
+  getExecutorAddress(): string {
+    return this.delegatedExecutor;
+  }
+
+  getAuthorizer(): EIP7702Authorizer {
+    return this.authorizer;
+  }
+
+  async getStatus(): Promise<DelegationStatus> {
+    return getDelegationStatus(await this.authority.getAddress());
+  }
+
+  private async feeHints(): Promise<{ tip: BigNumber; maxFee: BigNumber }> {
+    const fee = await provider.getFeeData();
+    const tip = fee.maxPriorityFeePerGas ?? ethers.utils.parseUnits('0.01', 'gwei');
+    const maxFee = fee.maxFeePerGas ?? (await provider.getGasPrice()).mul(2);
+    return { tip, maxFee: maxFee.gt(tip) ? maxFee : tip.mul(2) };
+  }
+
+  private pathToHex(path: Buffer | string): string {
+    if (typeof path === 'string') return path;
+    return bufToHex(Buffer.isBuffer(path) ? path : Buffer.from(path));
   }
 
   /**
-   * Execute delegated swap via EIP-7702
-   * Single transaction with EOA code delegation
+   * Ensure the EOA is delegated to DelegatedExecutor via a type-4 auth list,
+   * then call executeSwap on the EOA so the delegated code runs in EOA context.
    */
   async executeDelegatedSwap(params: DelegatedSwapParams): Promise<DelegatedSwapResult> {
     try {
-      console.log(`\n🔄 Executing delegated swap via EIP-7702...`);
-      console.log(`  Contract: ${this.delegatedExecutor.address}`);
-      console.log(`  Input: ${ethers.utils.formatUnits(params.amountIn, 18)}`);
-      console.log(`  Deadline: ${new Date(params.deadline * 1000).toISOString()}`);
+      const eoa = await this.authority.getAddress();
+      logger.info('EIP-7702 delegated swap');
+      logger.info('  EOA: ' + eoa);
+      logger.info('  delegate: ' + this.delegatedExecutor);
+      logger.info('  amountIn: ' + params.amountIn.toString());
 
-      // Create authorization
-      const auth = await this.authorizer.createAuthorization();
-      console.log(`  Auth nonce: ${auth.nonce.toString()}`);
-
-      // Estimate gas
-      const gasEstimate = await this.estimateDelegatedSwapGas(params);
-      console.log(`  Gas estimate: ${gasEstimate.toString()}`);
-
-      // Execute delegated swap
-      const tx = await this.delegatedExecutor.executeSwap(
+      const data = DELEGATED_EXECUTOR_IFACE.encodeFunctionData('executeSwap', [
         params.tokenIn,
         params.amountIn,
-        params.path,
+        this.pathToHex(params.path),
         params.minAmountOut,
         params.deadline,
-        {
-          gasLimit: gasEstimate.mul(110).div(100),
-          // EIP-7702 transaction properties would be set at lower level
-          // This is handled by ethers/web3 provider with 7702 support
-        }
+      ]);
+
+      const { tip, maxFee } = await this.feeHints();
+      const gasLimit = params.gasLimit ?? BigNumber.from(450_000);
+      const status = await getDelegationStatus(eoa);
+
+      // Always include a fresh auth so the tx is a true type-4 SetCode tx.
+      const auth = await this.authorizer.createAuthorization(status.nonce);
+      logger.info(
+        '  auth -> ' + auth.address + ' (auth.nonce=' + auth.nonce + ', pending tx nonce path)'
       );
 
-      console.log(`✋ Delegated swap sent: ${tx.hash}`);
+      const sent = await sendType4Transaction(this.authority, {
+        chainId: this.chainId,
+        maxPriorityFeePerGas: tip,
+        maxFeePerGas: maxFee,
+        gasLimit,
+        to: eoa, // execute against the delegated EOA itself
+        value: BigNumber.from(0),
+        data,
+        authorizationList: [auth],
+      });
 
-      const receipt = await tx.wait(3);
-
+      const receipt = await provider.waitForTransaction(sent.hash, 1, 90_000);
       if (!receipt) {
         return {
           success: false,
-          error: 'Delegated swap failed - no receipt',
+          error: 'type-4 confirmation timeout',
+          txHash: sent.hash,
+          authorization: auth,
+        };
+      }
+      if (receipt.status === 0) {
+        return {
+          success: false,
+          error: 'type-4 transaction reverted',
+          txHash: sent.hash,
+          gasUsed: receipt.gasUsed,
+          authorization: auth,
         };
       }
 
-      console.log(`✅ Delegated swap confirmed in block ${receipt.blockNumber}`);
-      console.log(`   Gas used: ${receipt.gasUsed.toString()}`);
+      const after = await getDelegationStatus(eoa);
+      logger.info(
+        '  delegated code now: ' +
+          (after.isDelegated ? String(after.delegate) : after.code.slice(0, 24))
+      );
+
+      if (params.clearAfter) {
+        await this.clearDelegation();
+      }
 
       return {
         success: true,
-        txHash: tx.hash,
+        txHash: sent.hash,
         gasUsed: receipt.gasUsed,
+        authorization: auth,
+        delegationCode: after.code,
       };
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
-      console.error(`❌ Delegated swap failed: ${errorMsg}`);
-
-      return {
-        success: false,
-        error: errorMsg,
-      };
+      logger.error('Delegated swap failed: ' + errorMsg);
+      return { success: false, error: errorMsg };
     }
   }
 
-  /**
-   * Execute batch swaps with delegation
-   * Multiple swaps in single delegated transaction
-   */
   async executeDelegatedBatchSwaps(
     swaps: DelegatedSwapParams[],
     deadline: number
   ): Promise<DelegatedSwapResult> {
     try {
-      console.log(`\n🔄 Executing ${swaps.length} delegated swaps via EIP-7702...`);
-
-      const swapRequests = swaps.map((swap) => ({
-        tokenIn: swap.tokenIn,
-        amountIn: swap.amountIn,
-        path: swap.path,
-        minAmountOut: swap.minAmountOut,
+      const eoa = await this.authority.getAddress();
+      const swapRequests = swaps.map((s) => ({
+        tokenIn: s.tokenIn,
+        amountIn: s.amountIn,
+        path: this.pathToHex(s.path),
+        minAmountOut: s.minAmountOut,
       }));
 
-      const gasEstimate = await this.estimateBatchSwapGas(swapRequests, deadline);
-      console.log(`  Gas estimate: ${gasEstimate.toString()}`);
+      const data = DELEGATED_EXECUTOR_IFACE.encodeFunctionData('executeBatchSwaps', [
+        swapRequests,
+        deadline,
+      ]);
 
-      const tx = await this.delegatedExecutor.executeBatchSwaps(swapRequests, deadline, {
-        gasLimit: gasEstimate.mul(110).div(100),
+      const { tip, maxFee } = await this.feeHints();
+      const status = await getDelegationStatus(eoa);
+      const auth = await this.authorizer.createAuthorization(status.nonce);
+
+      const sent = await sendType4Transaction(this.authority, {
+        chainId: this.chainId,
+        maxPriorityFeePerGas: tip,
+        maxFeePerGas: maxFee,
+        gasLimit: BigNumber.from(200_000 + swaps.length * 180_000),
+        to: eoa,
+        value: BigNumber.from(0),
+        data,
+        authorizationList: [auth],
       });
 
-      console.log(`✋ Batch swaps sent: ${tx.hash}`);
-
-      const receipt = await tx.wait(3);
-
-      if (!receipt) {
+      const receipt = await provider.waitForTransaction(sent.hash, 1, 90_000);
+      if (!receipt || receipt.status === 0) {
         return {
           success: false,
-          error: 'Batch swaps failed',
+          error: receipt ? 'batch type-4 reverted' : 'batch type-4 timeout',
+          txHash: sent.hash,
+          authorization: auth,
         };
       }
-
-      console.log(`✅ All swaps confirmed in block ${receipt.blockNumber}`);
       return {
         success: true,
-        txHash: tx.hash,
+        txHash: sent.hash,
         gasUsed: receipt.gasUsed,
+        authorization: auth,
       };
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
-      console.error(`❌ Batch swaps failed: ${errorMsg}`);
+      return { success: false, error: errorMsg };
+    }
+  }
 
+  /** Send a type-4 tx that authorizes the zero address, clearing EOA code. */
+  async clearDelegation(): Promise<DelegatedSwapResult> {
+    try {
+      const eoa = await this.authority.getAddress();
+      const status = await getDelegationStatus(eoa);
+      if (!status.isDelegated) {
+        return { success: true, error: 'already clear' };
+      }
+      const auth = await this.authorizer.createClearAuthorization(status.nonce);
+      const { tip, maxFee } = await this.feeHints();
+
+      const sent = await sendType4Transaction(this.authority, {
+        chainId: this.chainId,
+        maxPriorityFeePerGas: tip,
+        maxFeePerGas: maxFee,
+        gasLimit: BigNumber.from(100_000),
+        to: eoa,
+        value: BigNumber.from(0),
+        data: '0x',
+        authorizationList: [auth],
+      });
+      const receipt = await provider.waitForTransaction(sent.hash, 1, 60_000);
+      return {
+        success: !!receipt && receipt.status === 1,
+        txHash: sent.hash,
+        gasUsed: receipt?.gasUsed,
+        authorization: auth,
+      };
+    } catch (error) {
       return {
         success: false,
-        error: errorMsg,
+        error: error instanceof Error ? error.message : String(error),
       };
     }
-  }
-
-  /**
-   * Estimate gas for delegated swap
-   */
-  private async estimateDelegatedSwapGas(params: DelegatedSwapParams): Promise<BigNumber> {
-    try {
-      const gasEstimate = await this.delegatedExecutor.estimateGas.executeSwap(
-        params.tokenIn,
-        params.amountIn,
-        params.path,
-        params.minAmountOut,
-        params.deadline
-      );
-      return gasEstimate;
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      const err = new Error(
-        `Gas estimation failed (transaction would revert): ${reason}`
-      ) as Error & { cause: unknown };
-      err.cause = error;
-      throw err;
-    }
-  }
-
-  /**
-   * Estimate gas for batch swaps
-   */
-  private async estimateBatchSwapGas(
-    swaps: Array<{ tokenIn: string; amountIn: BigNumber; path: Buffer; minAmountOut: BigNumber }>,
-    deadline: number
-  ): Promise<BigNumber> {
-    try {
-      const gasEstimate = await this.delegatedExecutor.estimateGas.executeBatchSwaps(
-        swaps,
-        deadline
-      );
-      return gasEstimate;
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      const err = new Error(
-        `Gas estimation failed (transaction would revert): ${reason}`
-      ) as Error & { cause: unknown };
-      err.cause = error;
-      throw err;
-    }
-  }
-
-  /**
-   * Get delegated executor address
-   */
-  getExecutorAddress(): string {
-    return this.delegatedExecutor.address;
-  }
-
-  /**
-   * Get authorizer for manual authorization creation
-   */
-  getAuthorizer(): EIP7702Authorizer {
-    return this.authorizer;
   }
 }
 
 /**
- * EIP-7702 Transaction Builder
- * Constructs SetCode transactions for code delegation
+ * Low-level builder kept for external tooling / tests.
  */
 export class EIP7702TransactionBuilder {
-  /**
-   * Build SetCode transaction
-   * Sets EOA code to point to contract
-   */
+  static async buildAndSignSetCodeTx(args: {
+    authority: Wallet;
+    delegate: string;
+    to?: string | null;
+    data?: string;
+    gasLimit?: BigNumber;
+    chainId?: number;
+    value?: BigNumber;
+  }): Promise<{ raw: string; hash: string; authorization: Authorization }> {
+    const chainId = args.chainId ?? CHAIN_ID;
+    const eoa = await args.authority.getAddress();
+    const status = await getDelegationStatus(eoa);
+    const authorization = await signAuthorization(args.authority, args.delegate, {
+      chainId,
+      nonce: status.nonce,
+    });
+    const fee = await provider.getFeeData();
+    const tip = fee.maxPriorityFeePerGas ?? ethers.utils.parseUnits('0.01', 'gwei');
+    const maxFee = fee.maxFeePerGas ?? (await provider.getGasPrice()).mul(2);
+
+    const sent = await sendType4Transaction(args.authority, {
+      chainId,
+      maxPriorityFeePerGas: tip,
+      maxFeePerGas: maxFee.gt(tip) ? maxFee : tip.mul(2),
+      gasLimit: args.gasLimit ?? BigNumber.from(150_000),
+      to: args.to === undefined ? eoa : args.to,
+      value: args.value ?? BigNumber.from(0),
+      data: args.data ?? '0x',
+      authorizationList: [authorization],
+    });
+    return { raw: sent.raw, hash: sent.hash, authorization };
+  }
+
+  /** @deprecated legacy stub — use buildAndSignSetCodeTx */
   static buildSetCodeTx(
     _delegatedExecutorAddress: string,
     eoaAddress: string,
-    chainId: number = 42161
+    chainId: number = CHAIN_ID
   ): Partial<ethers.providers.TransactionRequest> {
-    // EIP-7702 transaction structure with authorization list
     return {
       to: eoaAddress,
-      type: 4, // EIP-7702 transaction type
+      type: 4,
       from: eoaAddress,
-      data: '0x', // Empty call data
-      chainId: chainId,
-      // Authorization list would be set here:
-      // authorizationList: [authorization]
+      data: '0x',
+      chainId,
     };
-  }
-
-  /**
-   * Encode SetCode authorization
-   */
-  static encodeSetCodeAuth(
-    delegatedExecutorAddress: string,
-    chainId: number,
-    nonce: number,
-    signature: ethers.Signature
-  ): string {
-    return ethers.utils.solidityPack(
-      ['uint256', 'address', 'uint256', 'uint8', 'bytes32', 'bytes32'],
-      [
-        chainId,
-        delegatedExecutorAddress,
-        nonce,
-        signature.v === 27 ? 0 : 1,
-        signature.r,
-        signature.s,
-      ]
-    );
   }
 }
 
@@ -340,4 +650,11 @@ export default {
   EIP7702Authorizer,
   EIP7702Executor,
   EIP7702TransactionBuilder,
+  signAuthorization,
+  signClearAuthorization,
+  authorizationDigest,
+  getDelegationStatus,
+  isDelegationDesignator,
+  parseDelegate,
+  sendType4Transaction,
 };

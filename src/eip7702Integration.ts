@@ -3,12 +3,20 @@ import { Logger } from './logger';
 import PreFlightValidator from './preFlightValidator';
 import EIP7702TestHarness from './eip7702TestHarness';
 import DelegationDebugger from './delegationDebugger';
+import {
+  EIP7702Executor,
+  getDelegationStatus,
+  signAuthorization,
+  DelegatedSwapResult,
+} from './eip7702';
+import { CHAIN_ID } from './config';
 
 const logger = new Logger('EIP7702Integration');
 
 /**
- * Complete EIP-7702 delegated swap execution with full debugging
- * Combines pre-flight validation, test harness, and detailed logging
+ * Complete EIP-7702 delegated swap execution with full debugging.
+ * Uses the spec-compliant type-4 path in eip7702.ts (raw auth digest +
+ * eth_sendRawTransaction), not a plain Contract.executeSwap call.
  */
 export class EIP7702Integration {
   private provider: ethers.providers.JsonRpcProvider;
@@ -23,26 +31,24 @@ export class EIP7702Integration {
     this.debugger = new DelegationDebugger();
   }
 
-  /**
-   * Execute delegated swap with full validation and debugging
-   */
   async executeDelegatedSwap(params: {
     delegatedExecutor: string;
     tokenIn: string;
     amountIn: BigNumber;
     minAmountOut: BigNumber;
     deadline: number;
-    swapPath: string;
+    swapPath: string | Buffer;
+    clearAfter?: boolean;
   }): Promise<{
     success: boolean;
     txHash?: string;
     gasUsed?: BigNumber;
     amountOut?: BigNumber;
     error?: string;
+    delegationCode?: string;
   }> {
     const eoa = this.signer.address;
 
-    // Initialize debugger
     this.debugger.logInit({
       eoa,
       executor: params.delegatedExecutor,
@@ -51,8 +57,7 @@ export class EIP7702Integration {
     });
 
     try {
-      // Step 1: Pre-flight validation
-      logger.info('🔍 Running pre-flight validation...');
+      logger.info('Running pre-flight validation...');
       const validationResult = await this.validator.validateDelegatedSwap({
         delegatedExecutor: params.delegatedExecutor,
         delegatedEOA: eoa,
@@ -64,31 +69,44 @@ export class EIP7702Integration {
       if (!validationResult.valid) {
         this.debugger.logError({
           phase: 'validation',
-          error: `Validation failed: ${validationResult.errors.join(', ')}`,
+          error: 'Validation failed: ' + validationResult.errors.join(', '),
           context: { validationResult },
         });
-
         return {
           success: false,
-          error: `Pre-flight validation failed: ${validationResult.errors[0]}`,
+          error: 'Pre-flight validation failed: ' + validationResult.errors[0],
         };
       }
 
-      // Log validation details
+      const status = await getDelegationStatus(eoa);
+      const tokenBal = await new ethers.Contract(
+        params.tokenIn,
+        ['function balanceOf(address) view returns (uint256)'],
+        this.provider
+      ).balanceOf(eoa);
+
       this.debugger.logValidation({
-        eoaBalance: {
-          has: BigNumber.from('100000000000000000'), // Mock: 0.1 WETH
-          needs: params.amountIn,
-        },
-        eoaNonce: await this.provider.getTransactionCount(eoa),
+        eoaBalance: { has: tokenBal, needs: params.amountIn },
+        eoaNonce: status.nonce,
         eoaEth: await this.provider.getBalance(eoa),
         executorCode: true,
-        approval: BigNumber.from('1000000000000000000'), // Mock: 1 WETH
+        approval: BigNumber.from(0),
         deadline: params.deadline,
       });
 
-      // Step 2: Check and perform approval if needed
-      logger.info('✅ Executing swap with delegated executor...');
+      const authPreview = await signAuthorization(this.signer, params.delegatedExecutor, {
+        chainId: CHAIN_ID,
+        nonce: status.nonce,
+      });
+      logger.info(
+        'Authorization preview: delegate=' +
+          authPreview.address +
+          ' nonce=' +
+          authPreview.nonce +
+          ' yParity=' +
+          authPreview.yParity
+      );
+
       this.debugger.logApproval({
         token: params.tokenIn,
         executor: params.delegatedExecutor,
@@ -96,92 +114,49 @@ export class EIP7702Integration {
         status: 'confirmed',
       });
 
-      // Step 3: Build and send delegation transaction
-      const gasEstimate = BigNumber.from('200000');
-      const gasPrice = await this.provider.getGasPrice();
-      const maxFeePerGas = gasPrice.mul(2); // Increase for priority
-      const maxPriorityFeePerGas = ethers.utils.parseUnits('2', 'gwei');
+      const executor = new EIP7702Executor(params.delegatedExecutor, CHAIN_ID, this.signer);
 
-      this.debugger.logExecution({
-        eoa,
-        executor: params.delegatedExecutor,
+      logger.info('Sending type-4 delegated swap via EIP7702Executor...');
+      const result: DelegatedSwapResult = await executor.executeDelegatedSwap({
         tokenIn: params.tokenIn,
         amountIn: params.amountIn,
+        path: params.swapPath,
         minAmountOut: params.minAmountOut,
         deadline: params.deadline,
-        gasEstimate,
-        gasLimit: gasEstimate,
-        maxFeePerGas,
-        maxPriorityFeePerGas,
-        status: 'pending',
+        clearAfter: params.clearAfter,
       });
 
-      // Build the call data for executeSwap
-      const executor = new ethers.Contract(
-        params.delegatedExecutor,
-        [
-          'function executeSwap(address tokenIn, uint256 amountIn, bytes calldata path, uint256 minAmountOut, uint256 deadline) external returns (uint256)',
-        ],
-        this.signer
-      );
-
-      // Send transaction
-      const tx = await executor.executeSwap(
-        params.tokenIn,
-        params.amountIn,
-        params.swapPath,
-        params.minAmountOut,
-        params.deadline,
-        {
-          gasLimit: gasEstimate.mul(110).div(100), // Add 10% buffer
-          maxFeePerGas,
-          maxPriorityFeePerGas,
-        }
-      );
-
-      this.debugger.logExecution({
-        eoa,
-        executor: params.delegatedExecutor,
-        tokenIn: params.tokenIn,
-        amountIn: params.amountIn,
-        minAmountOut: params.minAmountOut,
-        deadline: params.deadline,
-        txHash: tx.hash,
-        status: 'pending',
-      });
-
-      logger.info(`⏳ Waiting for transaction: ${tx.hash}`);
-
-      // Wait for confirmation
-      const receipt = await tx.wait();
-
-      if (!receipt) {
-        throw new Error('Transaction receipt not found');
+      if (!result.success) {
+        this.debugger.logError({
+          phase: 'execution',
+          error: result.error || 'unknown',
+          context: { txHash: result.txHash },
+        });
+        return {
+          success: false,
+          error: result.error,
+          txHash: result.txHash,
+          gasUsed: result.gasUsed,
+        };
       }
 
-      if (receipt.status === 0) {
-        throw new Error('Transaction reverted on-chain');
-      }
-
-      // Log settlement
       this.debugger.logSettlement({
-        txHash: tx.hash,
-        blockNumber: receipt.blockNumber,
-        gasUsed: receipt.gasUsed,
-        transactionFee: receipt.gasUsed.mul(receipt.effectiveGasPrice),
+        txHash: result.txHash || '',
+        blockNumber: 0,
+        gasUsed: result.gasUsed || BigNumber.from(0),
+        transactionFee: BigNumber.from(0),
         status: 'success',
       });
 
-      logger.info(`✅ Swap successful: ${tx.hash}`);
-
+      logger.info('Swap successful: ' + result.txHash);
       return {
         success: true,
-        txHash: tx.hash,
-        gasUsed: receipt.gasUsed,
+        txHash: result.txHash,
+        gasUsed: result.gasUsed,
+        delegationCode: result.delegationCode,
       };
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
-
       this.debugger.logError({
         phase: 'execution',
         error: error instanceof Error ? error : errorMsg,
@@ -190,43 +165,25 @@ export class EIP7702Integration {
           amountIn: params.amountIn.toString(),
         },
       });
-
-      logger.error(`❌ Swap failed: ${errorMsg}`);
-
-      return {
-        success: false,
-        error: errorMsg,
-      };
+      logger.error('Swap failed: ' + errorMsg);
+      return { success: false, error: errorMsg };
     }
   }
 
-  /**
-   * Run full diagnostic suite
-   */
   async runDiagnostics(): Promise<void> {
-    logger.info('\n🔧 Running comprehensive EIP-7702 diagnostics...\n');
-
-    // Run test harness
-    const harness = new EIP7702TestHarness(this.provider.connection.url, this.signer.privateKey);
-
+    logger.info('Running comprehensive EIP-7702 diagnostics...');
+    const harness = new EIP7702TestHarness(
+      this.provider.connection.url,
+      this.signer.privateKey
+    );
     const results = await harness.runFullTestSuite();
-
-    // Print debug report
     this.debugger.printDebugReport();
-
-    // Summary
     const passed = results.filter((r) => r.passed).length;
     const failed = results.filter((r) => !r.passed).length;
-
-    logger.info(`\n✅ Diagnostics complete: ${passed}/${results.length} tests passed`);
-    if (failed > 0) {
-      logger.warn(`⚠️ ${failed} test(s) need attention`);
-    }
+    logger.info('Diagnostics complete: ' + passed + '/' + results.length + ' tests passed');
+    if (failed > 0) logger.warn(String(failed) + ' test(s) need attention');
   }
 
-  /**
-   * Simulate a delegated swap (dry-run)
-   */
   async simulateDelegatedSwap(params: {
     delegatedExecutor: string;
     tokenIn: string;
@@ -247,7 +204,6 @@ export class EIP7702Integration {
       amountIn: params.amountIn,
       deadline: params.deadline,
     });
-
     return {
       wouldSucceed: validation.valid,
       errors: validation.errors,
@@ -257,9 +213,6 @@ export class EIP7702Integration {
   }
 }
 
-/**
- * Helper: Create integration instance and execute swap
- */
 export async function executeWithFullDebugging(options: {
   providerUrl: string;
   signerKey: string;
@@ -270,12 +223,9 @@ export async function executeWithFullDebugging(options: {
   swapPath: string;
 }): Promise<void> {
   const integration = new EIP7702Integration(options.providerUrl, options.signerKey);
-
-  // Run diagnostics first
   await integration.runDiagnostics();
 
-  // Simulate swap
-  logger.info('\n🎯 Simulating delegated swap...\n');
+  logger.info('Simulating delegated swap...');
   const simulation = await integration.simulateDelegatedSwap({
     delegatedExecutor: options.delegatedExecutor,
     tokenIn: options.tokenIn,
@@ -286,13 +236,12 @@ export async function executeWithFullDebugging(options: {
   });
 
   if (!simulation.wouldSucceed) {
-    logger.error('❌ Simulation failed:');
-    simulation.errors.forEach((e) => logger.error(`  - ${e}`));
+    logger.error('Simulation failed:');
+    simulation.errors.forEach((e) => logger.error('  - ' + e));
     return;
   }
 
-  // Execute swap
-  logger.info('\n🚀 Executing delegated swap...\n');
+  logger.info('Executing delegated swap (type-4)...');
   const result = await integration.executeDelegatedSwap({
     delegatedExecutor: options.delegatedExecutor,
     tokenIn: options.tokenIn,
@@ -303,9 +252,9 @@ export async function executeWithFullDebugging(options: {
   });
 
   if (result.success) {
-    logger.info(`✅ SUCCESS: ${result.txHash}`);
+    logger.info('SUCCESS: ' + result.txHash);
   } else {
-    logger.error(`❌ FAILED: ${result.error}`);
+    logger.error('FAILED: ' + result.error);
   }
 }
 

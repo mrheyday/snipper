@@ -375,14 +375,26 @@ export class ExecutionBridge {
     flashLoanReady: boolean;
     eip7702Ready: boolean;
     balance: BigNumber;
+    eip7702Delegation?: string | null;
   }> {
     const balance = await signer.getBalance();
+    let eip7702Ready = true;
+    let eip7702Delegation: string | null = null;
+    try {
+      const status = await this.eip7702Executor.getStatus();
+      eip7702Delegation = status.delegate;
+      // Ready if we can sign type-4 (always, with a funded EOA) — designator optional.
+      eip7702Ready = balance.gt(0);
+    } catch {
+      eip7702Ready = false;
+    }
 
     return {
       directReady: balance.gt(0),
       flashLoanReady: true, // Always available (Aave)
-      eip7702Ready: true, // Always available
+      eip7702Ready,
       balance: balance,
+      eip7702Delegation,
     };
   }
 

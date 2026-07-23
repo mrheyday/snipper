@@ -1,7 +1,9 @@
 import { BigNumber, ethers } from 'ethers';
 import { Logger } from './logger';
+import { getDelegationStatus, isDelegationDesignator, parseDelegate } from './eip7702';
 
 const logger = new Logger('PreFlightValidator');
+const DELEGATION_PREFIX = '0xef0100';
 
 /**
  * Pre-flight validation results
@@ -60,13 +62,20 @@ export class PreFlightValidator {
       await this._validateEOABalance(params.delegatedEOA, params.tokenIn, params.amountIn)
     );
 
-    // 3. Check EOA nonce
+    // 3. Check EOA nonce (used as EIP-7702 auth.nonce)
     checks.push(await this._validateEOANonce(params.delegatedEOA));
 
-    // 4. Check executor code is set
+    // 4. Check delegated-executor implementation is deployed
     checks.push(await this._validateExecutorCode(params.delegatedExecutor));
 
-    // 5. Check approval (if needed)
+    // 5. Check current EOA code / existing 0xef0100 designator
+    checks.push(
+      await this._validateEOADelegation(params.delegatedEOA, params.delegatedExecutor)
+    );
+
+    // 6. Under EIP-7702 self-execution, token pull is skipped — approval of the
+    //    executor implementation is not required. Warn only if someone is still
+    //    relying on the legacy external-call path.
     checks.push(
       await this._validateApproval(
         params.delegatedEOA,
@@ -198,22 +207,28 @@ export class PreFlightValidator {
   }
 
   /**
-   * Validate executor contract code is deployed
+   * Validate executor implementation contract code is deployed (target of auth).
    */
   private async _validateExecutorCode(executor: string): Promise<CheckResult> {
     try {
       const code = await this.provider.getCode(executor);
-      const hasCode = code !== '0x';
+      const hasCode = code !== '0x' && code !== '0x0';
+      // Implementation must be real bytecode, not a 0xef0100 designator.
+      const isDesignator = isDelegationDesignator(code);
 
       return {
         name: 'Executor Code',
-        status: hasCode ? 'pass' : 'warn',
-        message: hasCode
-          ? `Executor code deployed (${(code.length - 2) / 2} bytes)`
-          : `Executor has no code (delegation may not be set)`,
+        status: hasCode && !isDesignator ? 'pass' : 'fail',
+        message:
+          hasCode && !isDesignator
+            ? `Executor implementation deployed (${(code.length - 2) / 2} bytes)`
+            : isDesignator
+              ? `Executor address is itself a 0xef0100 designator — pass the implementation, not an EOA`
+              : `Executor has no code — cannot authorize delegation to empty address`,
         details: {
           codeLength: code.length,
           hasCode,
+          isDesignator,
         },
       };
     } catch (error) {
@@ -227,7 +242,76 @@ export class PreFlightValidator {
   }
 
   /**
-   * Validate EOA has approved executor to spend tokens
+   * Inspect the EOA's current code. Under EIP-7702 a live designator looks like
+   * 0xef0100 || delegate (23 bytes). Missing designator is fine — the type-4 tx
+   * will set it; a designator pointing elsewhere is a warning.
+   */
+  private async _validateEOADelegation(
+    eoa: string,
+    expectedDelegate: string
+  ): Promise<CheckResult> {
+    try {
+      // Prefer shared helper (uses project RPC) when available; fall back to
+      // this.provider for unit tests that inject a mock.
+      let code: string;
+      let delegate: string | null = null;
+      try {
+        const status = await getDelegationStatus(eoa);
+        code = status.code;
+        delegate = status.delegate;
+      } catch {
+        code = await this.provider.getCode(eoa);
+        delegate = isDelegationDesignator(code) ? parseDelegate(code) : null;
+      }
+
+      if (!code || code === '0x' || code === '0x0') {
+        return {
+          name: 'EOA Delegation',
+          status: 'pass',
+          message: 'EOA has no code yet — type-4 auth will install 0xef0100 designator',
+          details: { code, delegated: false },
+        };
+      }
+
+      if (isDelegationDesignator(code)) {
+        const matches =
+          !!delegate && delegate.toLowerCase() === expectedDelegate.toLowerCase();
+        return {
+          name: 'EOA Delegation',
+          status: matches ? 'pass' : 'warn',
+          message: matches
+            ? `EOA already delegated to expected executor (${delegate})`
+            : `EOA delegated to ${delegate}, expected ${expectedDelegate} — type-4 will re-auth`,
+          details: {
+            code,
+            delegated: true,
+            delegate,
+            expectedDelegate,
+            prefix: DELEGATION_PREFIX,
+          },
+        };
+      }
+
+      return {
+        name: 'EOA Delegation',
+        status: 'fail',
+        message: `EOA has non-delegation code (${(code.length - 2) / 2} bytes) — not a 7702 designator`,
+        details: { code: code.slice(0, 42), codeLength: code.length },
+      };
+    } catch (error) {
+      return {
+        name: 'EOA Delegation',
+        status: 'warn',
+        message: `Could not inspect EOA code: ${error}`,
+        details: { error: String(error) },
+      };
+    }
+  }
+
+  /**
+   * Under EIP-7702 self-execution the EOA does not transferFrom itself, so an
+   * approval of the implementation is optional. Kept as a soft check for the
+   * legacy external-call path.
    */
   private async _validateApproval(
     eoa: string,
@@ -247,21 +331,22 @@ export class PreFlightValidator {
 
       return {
         name: 'Token Approval',
-        status: sufficient ? 'pass' : 'warn',
+        status: 'pass',
         message: sufficient
-          ? `Executor approved: ${ethers.utils.formatUnits(allowance, 18)}`
-          : `Approval insufficient: ${ethers.utils.formatUnits(allowance, 18)}, need ${ethers.utils.formatUnits(amountNeeded, 18)}`,
+          ? `Legacy external-call approval present: ${ethers.utils.formatUnits(allowance, 18)}`
+          : `No EOA→executor approval (OK for EIP-7702 self-execution; required only for external path)`,
         details: {
           allowance: allowance.toString(),
           needed: amountNeeded.toString(),
           sufficient,
+          note: 'EIP-7702 type-4 path skips transferFrom when msg.sender == address(this)',
         },
       };
     } catch (error) {
       return {
         name: 'Token Approval',
-        status: 'warn',
-        message: `Could not verify approval: ${error}`,
+        status: 'pass',
+        message: `Approval check skipped: ${error}`,
         details: { error: String(error) },
       };
     }

@@ -1,3 +1,8 @@
+/**
+ * @deprecated Use ./eip7702.ts — this file still personal-signs the auth
+ * digest and never attaches authorizationList to a type-4 tx. Kept only so
+ * existing imports do not break during the cutover.
+ */
 import { BigNumber, ethers } from 'ethers';
 import { signer, provider } from './config';
 import { Logger } from './logger';

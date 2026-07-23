@@ -52,10 +52,33 @@ contract DelegatedExecutor is Multicallable {
         locked = bytes32(0);
     }
 
-    // Access control modifier
+    // Access control modifier.
+    // Under EIP-7702 the EOA calls *itself* (address(this) == msg.sender) with
+    // delegated code; that self-call is always authorized. Pre-deployed use still
+    // requires the caller to be on the allow-list.
     modifier onlyAllowedEOA() {
-        require(allowedEOAs[msg.sender], "EOA not authorized");
+        require(
+            msg.sender == address(this) || allowedEOAs[msg.sender],
+            "EOA not authorized"
+        );
         _;
+    }
+
+    /// @dev Pull `amount` of `token` into this account when needed.
+    ///      Under EIP-7702 self-execution, tokens already sit on the EOA so the
+    ///      transferFrom is skipped (and would fail without a self-allowance).
+    function _pullIn(address token, uint256 amount) internal {
+        if (msg.sender == address(this)) {
+            // Tokens are already on the delegated EOA; nothing to pull.
+            return;
+        }
+        SafeTransferLib.safeTransferFrom(token, msg.sender, address(this), amount);
+    }
+
+    /// @dev Recipient for swap outputs: keep funds on the account executing the
+    ///      code (EOA under 7702, or this contract when called externally).
+    function _recipient() internal view returns (address) {
+        return address(this);
     }
 
     // Owner control modifier
@@ -99,21 +122,22 @@ contract DelegatedExecutor is Multicallable {
         if (block.timestamp > deadline) revert DeadlineExceeded();
         _checkMinAmount(amountIn);
 
-        // Transfer tokens from EOA (msg.sender)
-        SafeTransferLib.safeTransferFrom(tokenIn, msg.sender, address(this), amountIn);
+        // Under EIP-7702, tokens already sit on the EOA (address(this)); externally
+        // they are pulled from msg.sender into this contract first.
+        _pullIn(tokenIn, amountIn);
 
         // Approve router
         SafeTransferLib.safeApproveWithRetry(tokenIn, SWAP_ROUTER, amountIn);
 
-        // Execute swap
-        try ISwapRouter(SWAP_ROUTER).exactInput(path, msg.sender, amountIn, minAmountOut) returns (uint256 out) {
+        // Execute swap — recipient is this account (EOA under 7702).
+        try ISwapRouter(SWAP_ROUTER).exactInput(path, _recipient(), amountIn, minAmountOut) returns (uint256 out) {
             amountOut = out;
         } catch {
             revert SwapFailed();
         }
 
         // Revoke any unconsumed allowance so the router never holds a standing approval
-        // from this contract between transactions.
+        // from this account between transactions.
         SafeTransferLib.safeApprove(tokenIn, SWAP_ROUTER, 0);
 
         emit Swap(tokenIn, _getTokenOut(path), amountIn, amountOut);
@@ -133,17 +157,17 @@ contract DelegatedExecutor is Multicallable {
         if (block.timestamp > deadline) revert DeadlineExceeded();
         _checkMinAmount(amountIn);
 
-        SafeTransferLib.safeTransferFrom(tokenIn, msg.sender, address(this), amountIn);
+        _pullIn(tokenIn, amountIn);
         SafeTransferLib.safeApproveWithRetry(tokenIn, SWAP_ROUTER, amountIn);
 
-        try ISwapRouter(SWAP_ROUTER).exactInput(path, address(this), amountIn, minAmountOut) returns (uint256 out) {
+        try ISwapRouter(SWAP_ROUTER).exactInput(path, _recipient(), amountIn, minAmountOut) returns (uint256 out) {
             amountOut = out;
         } catch {
             revert SwapFailed();
         }
 
         // Revoke any unconsumed allowance so the router never holds a standing approval
-        // from this contract between transactions.
+        // from this account between transactions.
         SafeTransferLib.safeApprove(tokenIn, SWAP_ROUTER, 0);
 
         // Handle callback for additional operations
@@ -151,9 +175,11 @@ contract DelegatedExecutor is Multicallable {
             _executeCallback(callbackData);
         }
 
-        // Transfer output to EOA
+        // Output already on this account under 7702; when called externally, forward it.
         address tokenOut = _getTokenOut(path);
-        SafeTransferLib.safeTransfer(tokenOut, msg.sender, amountOut);
+        if (msg.sender != address(this)) {
+            SafeTransferLib.safeTransfer(tokenOut, msg.sender, amountOut);
+        }
 
         emit Swap(tokenIn, tokenOut, amountIn, amountOut);
     }
@@ -181,22 +207,22 @@ contract DelegatedExecutor is Multicallable {
             SwapRequest calldata swap = swaps[i];
             _checkMinAmount(swap.amountIn);
 
-            // Transfer input from EOA
-            SafeTransferLib.safeTransferFrom(swap.tokenIn, msg.sender, address(this), swap.amountIn);
+            // Pull input unless we already are the EOA (EIP-7702 self-execution).
+            _pullIn(swap.tokenIn, swap.amountIn);
 
             // Approve and execute
             SafeTransferLib.safeApproveWithRetry(swap.tokenIn, SWAP_ROUTER, swap.amountIn);
 
-            try ISwapRouter(SWAP_ROUTER).exactInput(swap.path, msg.sender, swap.amountIn, swap.minAmountOut) returns (
-                uint256 out
-            ) {
+            try ISwapRouter(SWAP_ROUTER).exactInput(
+                swap.path, _recipient(), swap.amountIn, swap.minAmountOut
+            ) returns (uint256 out) {
                 amountsOut[i] = out;
             } catch {
                 revert SwapFailed();
             }
 
             // Revoke any unconsumed allowance so the router never holds a standing approval
-            // from this contract between transactions.
+            // from this account between transactions.
             SafeTransferLib.safeApprove(swap.tokenIn, SWAP_ROUTER, 0);
 
             emit Swap(swap.tokenIn, _getTokenOut(swap.path), swap.amountIn, amountsOut[i]);
