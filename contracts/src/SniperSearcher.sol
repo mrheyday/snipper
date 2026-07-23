@@ -5,39 +5,12 @@ import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 import {Multicallable} from "solady/utils/Multicallable.sol";
 import {MegaMEVOptimizationLib} from "./MegaMEVOptimizationLib.sol";
 
-/// @dev Full ERC20 + metadata interface (EIP-20 core + the `name`/`symbol`/`decimals`
-///      extension), defined locally so the contract has no OpenZeppelin dependency.
-///      Only `balanceOf` is actually called on-chain here; the rest is kept for
-///      completeness/tooling (e.g. off-chain callers introspecting this interface).
+/// @dev Local ERC20 surface — only balanceOf is read on-chain; rest for tooling.
 interface IERC20 {
-    event Transfer(address indexed from, address indexed to, uint256 value);
-    event Approval(address indexed owner, address indexed spender, uint256 value);
-
-    function totalSupply() external view returns (uint256);
     function balanceOf(address account) external view returns (uint256);
-    function transfer(address to, uint256 amount) external returns (bool);
-    function allowance(address owner, address spender) external view returns (uint256);
-    function approve(address spender, uint256 amount) external returns (bool);
-    function transferFrom(address from, address to, uint256 amount) external returns (bool);
-
-    function name() external view returns (string memory);
-    function symbol() external view returns (string memory);
-    function decimals() external view returns (uint8);
 }
 
-interface ISwapRouter {
-    struct ExactInputSingleParams {
-        bytes path;
-        address recipient;
-        uint256 amountIn;
-        uint256 amountOutMinimum;
-    }
-
-    function exactInputSingle(ExactInputSingleParams calldata params) external payable returns (uint256 amountOut);
-}
-
-/// @dev Matches the actual deployed SwapRouter02 ABI, which (unlike the original V1
-///      ISwapRouter) does not accept a per-call `deadline` field on exactInput/exactInputSingle.
+/// @dev Uniswap V3 SwapRouter02 exactInput (no per-call deadline field).
 interface IUniswapV3Router02 {
     struct ExactInputParams {
         bytes path;
@@ -52,27 +25,34 @@ interface IUniswapV3Router02 {
 error Unauthorized();
 error InsufficientAmountOut(uint256 received, uint256 minimum);
 error SwapFailed();
-error TransferFailed();
 error DeadlineExceeded();
 error AmountTooSmall(uint256 amountIn, uint256 minBitLength);
+error InvalidPath();
+error TokenInMismatch(address expected, address pathTokenIn);
+error ZeroAddress();
+error Reentrancy();
 
 /// @title SniperSearcher
-/// @notice MEV searcher contract for Arbitrum sniper bot
-/// @dev Executes token swaps on Uniswap V3 for MEV opportunities
+/// @notice Owner-scoped Uniswap V3 exact-input executor for MEV / flash-loan callers.
+/// @dev Allowed executors (e.g. FlashLoanReceiver) pull tokenIn via transferFrom, swap on
+///      SwapRouter02, then receive tokenOut back for Aave repay or profit.
 contract SniperSearcher is Multicallable {
-    address public immutable owner;
+    /// @dev Uni V3 single-hop path = token(20) + fee(3) + token(20) = 43 bytes.
+    uint256 private constant MIN_PATH_LENGTH = 43;
+    /// @dev Default max age for executeSwap when caller omits an explicit deadline.
+    uint256 private constant DEFAULT_DEADLINE_SECONDS = 120;
+
+    address public owner;
     address public immutable swapRouter;
     uint256 public immutable chainId;
 
-    // Access control for flash loan receiver and other executors
     mapping(address executor => bool allowed) public allowedExecutors;
 
-    /// @notice Minimum bit-length (via the native CLZ opcode) an `amountIn` must have to
-    ///         proceed to the swap. 0 disables the check. Set once at deployment (immutable,
-    ///         not owner-settable) to keep deployed bytecode small — rejecting a dust trade
-    ///         here is far cheaper than paying for a transferFrom + approve + router call
-    ///         that was never going to be worth it.
+    /// @notice Min bit-length of amountIn (0 = disabled). Immutable dust short-circuit.
     uint256 public immutable minAmountBitLength;
+
+    /// @dev Transient reentrancy lock (Cancun/Osaka tstore).
+    bool transient locked;
 
     event Swap(address indexed tokenIn, address indexed tokenOut, uint256 amountIn, uint256 amountOut);
     event Withdrawn(address indexed token, address indexed to, uint256 amount);
@@ -90,7 +70,15 @@ contract SniperSearcher is Multicallable {
         _;
     }
 
+    modifier nonReentrant() {
+        if (locked) revert Reentrancy();
+        locked = true;
+        _;
+        locked = false;
+    }
+
     constructor(address _swapRouter, uint256 _minAmountBitLength) {
+        if (_swapRouter == address(0)) revert ZeroAddress();
         owner = msg.sender;
         swapRouter = _swapRouter;
         minAmountBitLength = _minAmountBitLength;
@@ -101,137 +89,54 @@ contract SniperSearcher is Multicallable {
         chainId = id;
     }
 
-    /// @notice Allow an executor (like FlashLoanReceiver) to call swap functions
     function allowExecutor(address executor) external onlyOwner {
-        require(executor != address(0), "Invalid executor");
+        if (executor == address(0)) revert ZeroAddress();
         allowedExecutors[executor] = true;
         emit ExecutorAllowed(executor);
     }
 
-    /// @notice Revoke an executor's access
     function revokeExecutor(address executor) external onlyOwner {
         allowedExecutors[executor] = false;
         emit ExecutorRevoked(executor);
     }
 
-    /// @notice Execute exact-input swap on Uniswap V3
-    /// @param tokenIn Input token address
-    /// @param amountIn Amount of input token
-    /// @param path Encoded swap path (tokenIn → ... → tokenOut)
-    /// @param minAmountOut Minimum acceptable output amount
-    /// @return amountOut Amount of output token received
+    function transferOwnership(address newOwner) external onlyOwner {
+        if (newOwner == address(0)) revert ZeroAddress();
+        address previous = owner;
+        owner = newOwner;
+        emit OwnershipTransferred(previous, newOwner);
+    }
+
+    /// @notice Exact-input swap with default deadline (now + 120s).
     function executeSwap(address tokenIn, uint256 amountIn, bytes calldata path, uint256 minAmountOut)
         external
         onlyOwnerOrAllowedExecutor
+        nonReentrant
         returns (uint256 amountOut)
     {
-        _checkMinAmount(amountIn);
-
-        // Transfer tokens from caller to this contract
-        SafeTransferLib.safeTransferFrom(tokenIn, msg.sender, address(this), amountIn);
-
-        // Approve router
-        SafeTransferLib.safeApproveWithRetry(tokenIn, swapRouter, amountIn);
-
-        // Execute swap
-        try IUniswapV3Router02(swapRouter)
-            .exactInput(
-                IUniswapV3Router02.ExactInputParams({
-                    path: path,
-                    recipient: address(this),
-                    amountIn: amountIn,
-                    amountOutMinimum: minAmountOut
-                })
-            ) returns (
-            uint256 out
-        ) {
-            amountOut = out;
-        } catch {
-            revert SwapFailed();
-        }
-
-        // Revoke any unconsumed allowance so the router never holds a standing approval
-        // from this contract between transactions.
-        SafeTransferLib.safeApprove(tokenIn, swapRouter, 0);
-
-        if (amountOut < minAmountOut) {
-            revert InsufficientAmountOut(amountOut, minAmountOut);
-        }
-
-        // Return proceeds to caller so FlashLoanReceiver (and other allowed
-        // executors) can repay Aave / keep profit. Owner calls keep tokens here
-        // unless the owner is itself the msg.sender path — still transfer so
-        // balance accounting is consistent for nested executor flows.
-        address tokenOut = _getTokenOut(path);
-        SafeTransferLib.safeTransfer(tokenOut, msg.sender, amountOut);
-
-        emit Swap(tokenIn, tokenOut, amountIn, amountOut);
+        amountOut = _executeSwap(tokenIn, amountIn, path, minAmountOut, block.timestamp + DEFAULT_DEADLINE_SECONDS);
     }
 
-    /// @notice Execute multi-hop swap with custom deadline
-    /// @param tokenIn Input token
-    /// @param amountIn Input amount
-    /// @param path Encoded swap path
-    /// @param minAmountOut Minimum output
-    /// @param deadline Transaction deadline
-    /// @return amountOut Output amount
+    /// @notice Exact-input swap with explicit deadline.
     function executeSwapWithDeadline(
         address tokenIn,
         uint256 amountIn,
         bytes calldata path,
         uint256 minAmountOut,
         uint256 deadline
-    ) external onlyOwnerOrAllowedExecutor returns (uint256 amountOut) {
-        if (block.timestamp > deadline) revert DeadlineExceeded();
-        _checkMinAmount(amountIn);
-
-        SafeTransferLib.safeTransferFrom(tokenIn, msg.sender, address(this), amountIn);
-        SafeTransferLib.safeApproveWithRetry(tokenIn, swapRouter, amountIn);
-
-        try IUniswapV3Router02(swapRouter)
-            .exactInput(
-                IUniswapV3Router02.ExactInputParams({
-                    path: path,
-                    recipient: address(this),
-                    amountIn: amountIn,
-                    amountOutMinimum: minAmountOut
-                })
-            ) returns (
-            uint256 out
-        ) {
-            amountOut = out;
-        } catch {
-            revert SwapFailed();
-        }
-
-        // Revoke any unconsumed allowance so the router never holds a standing approval
-        // from this contract between transactions.
-        SafeTransferLib.safeApprove(tokenIn, swapRouter, 0);
-
-        if (amountOut < minAmountOut) {
-            revert InsufficientAmountOut(amountOut, minAmountOut);
-        }
-
-        address tokenOut = _getTokenOut(path);
-        SafeTransferLib.safeTransfer(tokenOut, msg.sender, amountOut);
-
-        emit Swap(tokenIn, tokenOut, amountIn, amountOut);
+    ) external onlyOwnerOrAllowedExecutor nonReentrant returns (uint256 amountOut) {
+        amountOut = _executeSwap(tokenIn, amountIn, path, minAmountOut, deadline);
     }
 
-    /// @notice Withdraw tokens from contract
-    /// @param token Token to withdraw
-    /// @param to Recipient address
-    /// @param amount Amount to withdraw
     function withdraw(address token, address to, uint256 amount) external onlyOwner {
+        if (to == address(0)) revert ZeroAddress();
         if (amount == 0) amount = IERC20(token).balanceOf(address(this));
         SafeTransferLib.safeTransfer(token, to, amount);
         emit Withdrawn(token, to, amount);
     }
 
-    /// @notice Withdraw multiple tokens
-    /// @param tokens Array of token addresses
-    /// @param to Recipient address
     function withdrawAll(address[] calldata tokens, address to) external onlyOwner {
+        if (to == address(0)) revert ZeroAddress();
         for (uint256 i = 0; i < tokens.length; ++i) {
             uint256 balance = IERC20(tokens[i]).balanceOf(address(this));
             if (balance > 0) {
@@ -241,26 +146,18 @@ contract SniperSearcher is Multicallable {
         }
     }
 
-    /// @notice Check balance of a token
-    /// @param token Token address
-    /// @return Balance of token in this contract
     function getBalance(address token) external view returns (uint256) {
         return IERC20(token).balanceOf(address(this));
     }
 
-    /// @notice Withdraw ETH from contract
-    /// @param to Recipient address
-    /// @param amount Amount to withdraw (0 = all)
     function withdrawETH(address payable to, uint256 amount) external onlyOwner {
+        if (to == address(0)) revert ZeroAddress();
         if (amount == 0) amount = address(this).balance;
-        require(to != address(0), "Invalid recipient");
         SafeTransferLib.safeTransferETH(to, amount);
     }
 
-    /// @notice Emergency recovery for stuck tokens
-    /// @param token Token to recover
-    /// @param to Recipient address
     function emergencyWithdrawToken(address token, address to) external onlyOwner {
+        if (to == address(0)) revert ZeroAddress();
         uint256 balance = IERC20(token).balanceOf(address(this));
         if (balance > 0) {
             SafeTransferLib.safeTransfer(token, to, balance);
@@ -268,30 +165,71 @@ contract SniperSearcher is Multicallable {
         }
     }
 
-    /// @notice Emergency recovery for stuck ETH (alias for withdrawETH)
-    /// @param to Recipient address
     function emergencyWithdrawETH(address payable to) external onlyOwner {
+        if (to == address(0)) revert ZeroAddress();
         uint256 balance = address(this).balance;
         if (balance > 0) {
             SafeTransferLib.safeTransferETH(to, balance);
         }
     }
 
-    /// @dev Extract output token from Uniswap V3 path encoding
+    receive() external payable {}
+
+    function _executeSwap(
+        address tokenIn,
+        uint256 amountIn,
+        bytes calldata path,
+        uint256 minAmountOut,
+        uint256 deadline
+    ) internal returns (uint256 amountOut) {
+        if (block.timestamp > deadline) revert DeadlineExceeded();
+        _checkMinAmount(amountIn);
+        _validatePath(tokenIn, path);
+
+        SafeTransferLib.safeTransferFrom(tokenIn, msg.sender, address(this), amountIn);
+        SafeTransferLib.safeApproveWithRetry(tokenIn, swapRouter, amountIn);
+
+        try IUniswapV3Router02(swapRouter).exactInput(
+            IUniswapV3Router02.ExactInputParams({
+                path: path,
+                recipient: address(this),
+                amountIn: amountIn,
+                amountOutMinimum: minAmountOut
+            })
+        ) returns (uint256 out) {
+            amountOut = out;
+        } catch {
+            revert SwapFailed();
+        }
+
+        SafeTransferLib.safeApprove(tokenIn, swapRouter, 0);
+
+        if (amountOut < minAmountOut) {
+            revert InsufficientAmountOut(amountOut, minAmountOut);
+        }
+
+        address tokenOut = _getTokenOut(path);
+        SafeTransferLib.safeTransfer(tokenOut, msg.sender, amountOut);
+
+        emit Swap(tokenIn, tokenOut, amountIn, amountOut);
+    }
+
+    /// @dev path = tokenIn(20) | fee(3) | ... | tokenOut(20); min one hop = 43 bytes.
+    function _validatePath(address tokenIn, bytes calldata path) internal pure {
+        if (path.length < MIN_PATH_LENGTH) revert InvalidPath();
+        if ((path.length - 20) % 23 != 0) revert InvalidPath();
+        address pathTokenIn = address(bytes20(path[0:20]));
+        if (pathTokenIn != tokenIn) revert TokenInMismatch(tokenIn, pathTokenIn);
+    }
+
     function _getTokenOut(bytes calldata path) internal pure returns (address) {
-        require(path.length >= 20, "Invalid path");
         return address(bytes20(path[path.length - 20:]));
     }
 
-    /// @dev Reverts cheaply (native CLZ opcode, no external calls) if `amountIn` is too small
-    ///      to be worth the transferFrom + approve + router call that would otherwise follow.
     function _checkMinAmount(uint256 amountIn) internal view {
         uint256 minBits = minAmountBitLength;
         if (minBits != 0 && MegaMEVOptimizationLib.bitLength(amountIn) < minBits) {
             revert AmountTooSmall(amountIn, minBits);
         }
     }
-
-    /// @notice Receive ETH for gas refunds
-    receive() external payable {}
 }

@@ -5,18 +5,30 @@
 
 export const SNIPER_SEARCHER_ABI = [
   // Events
-  'event SwapExecuted(address indexed tokenIn, address indexed tokenOut, uint256 amountIn, uint256 amountOut)',
+  'event Swap(address indexed tokenIn, address indexed tokenOut, uint256 amountIn, uint256 amountOut)',
   'event Withdrawn(address indexed token, address indexed to, uint256 amount)',
+  'event OwnershipTransferred(address indexed previousOwner, address indexed newOwner)',
+  'event ExecutorAllowed(address indexed executor)',
+  'event ExecutorRevoked(address indexed executor)',
 
   // View functions
   'function getBalance(address token) external view returns (uint256)',
   'function owner() external view returns (address)',
+  'function swapRouter() external view returns (address)',
+  'function allowedExecutors(address executor) external view returns (bool)',
+  'function minAmountBitLength() external view returns (uint256)',
 
   // State-changing functions
-  'function executeSwap(address tokenIn, uint256 amountIn, bytes calldata path, uint256 minAmountOut) external payable returns (uint256 amountOut)',
-  'function executeSwapWithDeadline(address tokenIn, uint256 amountIn, bytes calldata path, uint256 minAmountOut, uint256 deadline) external payable returns (uint256 amountOut)',
+  'function executeSwap(address tokenIn, uint256 amountIn, bytes calldata path, uint256 minAmountOut) external returns (uint256 amountOut)',
+  'function executeSwapWithDeadline(address tokenIn, uint256 amountIn, bytes calldata path, uint256 minAmountOut, uint256 deadline) external returns (uint256 amountOut)',
+  'function allowExecutor(address executor) external',
+  'function revokeExecutor(address executor) external',
+  'function transferOwnership(address newOwner) external',
   'function withdraw(address token, address to, uint256 amount) external',
+  'function withdrawAll(address[] calldata tokens, address to) external',
   'function withdrawETH(address payable to, uint256 amount) external',
+  'function emergencyWithdrawToken(address token, address to) external',
+  'function emergencyWithdrawETH(address payable to) external',
 ];
 
 export const FLASH_LOAN_RECEIVER_ABI = [

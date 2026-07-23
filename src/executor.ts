@@ -41,40 +41,31 @@ export class SniperExecutor {
       logger.info(`Input: ${ethers.utils.formatUnits(params.amountIn, 18)}`);
       logger.info(`Min output: ${ethers.utils.formatUnits(params.minAmountOut, 18)}`);
 
-      // Check & ensure token allowance for searcher contract
-      const erc20 = new ethers.Contract(
-        params.tokenIn,
-        [
-          'function allowance(address,address) view returns (uint256)',
-          'function approve(address,uint256) returns (bool)',
-        ],
-        this.executorSigner
-      );
-      const ownerAddress = await this.executorSigner.getAddress();
-      const currentAllowance: BigNumber = await erc20.allowance(
-        ownerAddress,
-        this.searcher.address
-      );
-      if (currentAllowance.lt(params.amountIn)) {
-        logger.info(`Approving SniperSearcher (${this.searcher.address}) for ${params.tokenIn}...`);
-        const approveTx = await erc20.approve(this.searcher.address, ethers.constants.MaxUint256);
-        await approveTx.wait(1);
-        logger.info('✓ Approval confirmed');
-      }
+      // Exact-amount approve only (never MaxUint256 — limits blast radius if key leaks)
+      await this.ensureAllowance(params.tokenIn, params.amountIn);
 
-      // Estimate gas
-      const gasEstimate = await this.estimateSwapGas(params);
+      // Prefer deadline-bound entrypoint (S-3). Default 120s matches on-chain executeSwap.
+      const deadline =
+        params.deadline && params.deadline > 0
+          ? params.deadline
+          : Math.floor(Date.now() / 1000) + 120;
+
+      const gasEstimate = await this.estimateSwapGasWithDeadline({
+        ...params,
+        deadline,
+      });
       logger.info(`Gas estimate: ${gasEstimate.toString()}`);
+      logger.info(`Deadline: ${deadline}`);
 
-      // Execute swap
-      const tx = await this.searcher.executeSwap(
+      const tx = await this.searcher.executeSwapWithDeadline(
         params.tokenIn,
         params.amountIn,
         params.path,
         params.minAmountOut,
+        deadline,
         {
           gasLimit: gasEstimate.mul(110).div(100), // 10% buffer
-          maxFeePerGas: await provider.getGasPrice().then((p) => p.mul(120).div(100)), // 20% above current
+          maxFeePerGas: await provider.getGasPrice().then((p) => p.mul(120).div(100)),
         }
       );
 
@@ -193,6 +184,38 @@ export class SniperExecutor {
   }
 
   /**
+   * Ensure searcher can pull exactly `amount` of token (exact approve, not infinite).
+   */
+  private async ensureAllowance(token: string, amount: BigNumber): Promise<void> {
+    const erc20 = new ethers.Contract(
+      token,
+      [
+        'function allowance(address,address) view returns (uint256)',
+        'function approve(address,uint256) returns (bool)',
+      ],
+      this.executorSigner
+    );
+    const ownerAddress = await this.executorSigner.getAddress();
+    const currentAllowance: BigNumber = await erc20.allowance(
+      ownerAddress,
+      this.searcher.address
+    );
+    if (currentAllowance.gte(amount)) return;
+
+    // Reset to 0 first for non-standard ERC20s that require it, then set exact amount.
+    if (currentAllowance.gt(0)) {
+      const resetTx = await erc20.approve(this.searcher.address, 0);
+      await resetTx.wait(1);
+    }
+    logger.info(
+      `Approving SniperSearcher (${this.searcher.address}) for exact ${amount.toString()} of ${token}...`
+    );
+    const approveTx = await erc20.approve(this.searcher.address, amount);
+    await approveTx.wait(1);
+    logger.info('✓ Exact approval confirmed');
+  }
+
+  /**
    * Execute swap with custom deadline
    */
   async executeSwapWithDeadline(
@@ -202,6 +225,8 @@ export class SniperExecutor {
       console.log(
         `\n📊 Executing swap with deadline ${new Date(params.deadline * 1000).toISOString()}...`
       );
+
+      await this.ensureAllowance(params.tokenIn, params.amountIn);
 
       const gasEstimate = await this.estimateSwapGasWithDeadline(params);
       console.log(`  Gas estimate: ${gasEstimate.toString()}`);
