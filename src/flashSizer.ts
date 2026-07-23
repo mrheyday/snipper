@@ -1,6 +1,6 @@
 import { ethers } from 'ethers';
 import { provider } from './config';
-import { DEXAggregator } from './dexAggregator';
+import { DEXAggregator, ARBITRUM_DEX_PROTOCOLS } from './dexAggregator';
 import { Logger } from './logger';
 import { getAvailableLiquidity, getReserveEligibility } from './aaveReserves';
 import { bitquery } from './bitquery';
@@ -99,7 +99,11 @@ export class FlashSizer {
 
   constructor(config: Partial<SizerConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
-    this.dexAggregator = new DEXAggregator(provider);
+    // Use ALL known DEX protocols for quoting — not just Uniswap V3.
+    // Execution is still Uniswap V3 only (SniperSearcher hard-wired), but the
+    // sizer must be able to see pools on Camelot, Ramses, SushiSwap etc. so
+    // that tokens without a Uni V3 pool aren't silently abandoned.
+    this.dexAggregator = new DEXAggregator(provider, ARBITRUM_DEX_PROTOCOLS);
   }
 
   // ─── Public API ────────────────────────────────────────────────────────────
@@ -196,7 +200,19 @@ export class FlashSizer {
         `${ethers.formatUnits(upperBound, decimals)}]`
     );
 
-    // 3 & 4. Binary / step search (round-trip quotes)
+    // 3. Pre-check: make sure at least one DEX has a quote at minimum size.
+    //    This avoids burning SEARCH_STEPS RPC calls on a token with no pool.
+    const minProbe = await this.dexAggregator.findBestRoundTripRoute(tokenIn, midToken, minLoanWei);
+    if (!minProbe || minProbe.amountOut <= 0n) {
+      logger.warn(
+        `[FlashSizer] No round-trip DEX quote found for ${tokenIn} → ${midToken} → ${tokenIn}. ` +
+          `Check that a pool exists on Uniswap V3, Camelot, Ramses, or SushiSwap.`
+      );
+      return null;
+    }
+    logger.info(`  Route found via ${minProbe.protocol.name} (fee ${minProbe.feeTier}) at min size.`);
+
+    // 4. Binary / step search (round-trip quotes)
     const result = await this.binarySearch(tokenIn, midToken, upperBound, availableLiquidity, minLoanWei);
 
     if (!result) {

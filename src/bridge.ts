@@ -227,8 +227,9 @@ export class ExecutionBridge {
           success: false,
           mode: ExecutionMode.FLASH_LOAN,
           error:
-            'FlashSizer: no profitable loan size found within slippage constraint. ' +
-            'Possible causes: insufficient Aave liquidity, price impact too high, or no DEX route.',
+            'FlashSizer: no profitable loan size found. ' +
+            'Possible causes: no DEX pool for this pair (check FlashSizer logs for route), ' +
+            'insufficient Aave liquidity, or DEX round-trip fees exceed arb spread.',
         };
       }
 
