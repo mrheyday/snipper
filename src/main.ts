@@ -1,8 +1,7 @@
 import { ethers } from 'ethers';
-import { getTokens } from './tokens';
 import { ExecutionBridge, ExecutionMode } from './bridge';
 import { encodePath, validatePath, getOptimalFee } from './uniswap';
-import { DEXAggregator } from './dexAggregator';
+import { DEXAggregator, EXECUTION_VENUE_PROTOCOLS } from './dexAggregator';
 import {
   provider,
   signer,
@@ -17,6 +16,15 @@ import { Contract } from 'ethers';
 import { Logger } from './logger';
 import { validateAndChecksumAddress, validateFeeTier } from './validation';
 import { bitquery } from './bitquery';
+import {
+  assertRouterAllowed,
+  isFlashBaseToken,
+  isRouterAllowed,
+  isSnipePairAllowed,
+  logAllowlistSummary,
+  AAVE_FLASH_BASE_TOKENS,
+} from './allowlist';
+import { getBestSnipeTokens } from './snipeTokenSet';
 
 interface OpportunityParams {
   tokenIn: string;
@@ -63,47 +71,65 @@ class SniperBot {
     try {
       // Verify setup
       await this.verifySetup();
+      assertRouterAllowed(SWAP_ROUTER_ADDRESS);
+      logAllowlistSummary();
 
-      // Detect latest WETH-paired Uniswap V3 pool (Bitquery HTTP)
-      logger.info('Detecting latest WETH-paired Uniswap V3 pool (Bitquery)...');
-      const detected = await getTokens({ wethOnly: true });
-      const { Token0, Token1 } = detected;
-      const detectedPool = detected.pool;
+      // Bitquery: rank hot pairs + new pools against allowlist + Aave flash bases
+      logger.info('Discovering best sniping token set (Bitquery + allowlist)...');
+      const discovered = await getBestSnipeTokens();
+      const { Token0, Token1, set: tokenSet } = discovered;
+      const detectedPool = discovered.pool;
 
       if (!Token0 || !Token1) {
-        throw new Error('Failed to detect tokens from pool');
+        throw new Error(
+          'Failed to detect allowlisted snipe tokens (check BITQUERY_TOKEN / ALLOWED_TOKENS)'
+        );
+      }
+      if (!isSnipePairAllowed(Token0.token.address, Token1.token.address)) {
+        throw new Error(
+          `Pair not allowlisted: ${Token0.token.address} / ${Token1.token.address}`
+        );
+      }
+      if (tokenSet.candidates.length) {
+        logger.info(`Top snipe candidates (${tokenSet.candidates.length}):`);
+        for (const c of tokenSet.candidates.slice(0, 5)) {
+          logger.info(
+            `  #${c.rank} score=${c.score.toFixed(1)} ${c.baseSymbol ?? c.baseToken.slice(0, 8)}→${
+              c.targetSymbol ?? c.targetToken.slice(0, 8)
+            } [${c.source}] trades=${c.tradeCount ?? 0}`
+          );
+        }
       }
       if (detectedPool) {
         logger.info(`Pool address from Bitquery: ${detectedPool}`);
       }
-      if (detected.fee !== undefined) {
-        logger.info(`Pool fee tier from event: ${detected.fee}`);
+      if (discovered.fee !== undefined) {
+        logger.info(`Pool fee tier from event: ${discovered.fee}`);
       }
-
-      const AAVE_RESERVE_TOKENS = [
-        '0x82af49447d8a07e3bd95bd0d56f35241523fbab1', // WETH
-        '0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9', // USDT
-        '0xaf88d065e77c8cc2239327c5edb3a432268e5831', // USDC
-        '0x2f2a2543d76a4166549f7aaab2e75bef0aefc5b0', // WBTC
-        '0xda10009cbd5d07dd0cecc66161fc93d7c9000da1', // DAI
-      ];
 
       const walletAddress = await signer.getAddress();
 
-      // Orient input token (prefer Aave V3 reserve assets for flash loan borrowing, or WETH/wallet balance)
+      // Orient: flash borrow base (Aave) → target listing
       let tokenFromObj = Token0;
       let tokenToObj = Token1;
 
-      if (AAVE_RESERVE_TOKENS.includes(Token1.token.address.toLowerCase())) {
+      if (isFlashBaseToken(Token1.token.address) && !isFlashBaseToken(Token0.token.address)) {
         tokenFromObj = Token1;
         tokenToObj = Token0;
-      } else if (AAVE_RESERVE_TOKENS.includes(Token0.token.address.toLowerCase())) {
+      } else if (isFlashBaseToken(Token0.token.address)) {
         tokenFromObj = Token0;
         tokenToObj = Token1;
+      } else if (
+        AAVE_FLASH_BASE_TOKENS.map((t) => t.toLowerCase()).includes(
+          Token1.token.address.toLowerCase()
+        )
+      ) {
+        tokenFromObj = Token1;
+        tokenToObj = Token0;
       } else {
         const bal0 = await Token0.contract.balanceOf(walletAddress);
         const bal1 = await Token1.contract.balanceOf(walletAddress);
-        if ((bal0 === 0n) && (bal1 > 0)) {
+        if (bal0 === 0n && bal1 > 0n) {
           tokenFromObj = Token1;
           tokenToObj = Token0;
         }
@@ -132,14 +158,18 @@ class SniperBot {
 
       // Multi-DEX Path Finding — query with a 1-token sentinel to discover the
       // best fee tier. FlashSizer will re-quote at the dynamically computed size.
-      logger.info('Discovering best DEX route and fee tier...');
-      const dexAggregator = new DEXAggregator(provider);
+      logger.info('Discovering best Uniswap V3 fee tier (allowlisted router only)...');
+      // Only Uniswap V3 — SniperSearcher is hard-wired to SwapRouter02
+      const dexAggregator = new DEXAggregator(provider, EXECUTION_VENUE_PROTOCOLS);
       const probeAmount = ethers.parseUnits('1', tokenFrom.decimals);
       const bestRoute = await dexAggregator.findBestRoute(
         tokenFrom.address,
         tokenTo.address,
         probeAmount
       );
+      if (bestRoute && !isRouterAllowed(bestRoute.protocol.routerAddress)) {
+        throw new Error(`Route router not allowlisted: ${bestRoute.protocol.routerAddress}`);
+      }
 
       const feeTier = bestRoute
         ? bestRoute.feeTier

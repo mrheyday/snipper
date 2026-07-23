@@ -72,6 +72,18 @@ export type PoolLiquidity = {
   txHash?: string;
 };
 
+/** Recent high-activity pair from DEXTrades (for sniping candidate ranking). */
+export type HotPair = {
+  tokenA: string;
+  tokenB: string;
+  symbolA?: string;
+  symbolB?: string;
+  protocol?: string;
+  tradeCount: number;
+  lastTx?: string;
+  lastTime?: string;
+};
+
 export type Unsubscribe = { unsubscribe: () => void };
 
 function token(): string {
@@ -614,6 +626,90 @@ query PoolLiq($pool: String!, $limit: Int!) {
    */
   async findRecentWethPools(limit = 10): Promise<PoolCreatedEvent[]> {
     return this.latestPoolCreated({ wethOnly: true, limit });
+  }
+
+  /**
+   * Recent DEX trades on Arbitrum — aggregate into hot pairs for sniping candidates.
+   * Prefers Uniswap/Sushi/Camelot-style rows; fails soft to [] on API shape drift.
+   */
+  async recentHotPairs(opts?: { limit?: number; wethOnly?: boolean }): Promise<HotPair[]> {
+    const limit = opts?.limit ?? 50;
+    const wethOnly = opts?.wethOnly !== false;
+    const q = `
+query RecentTrades($limit: Int!) {
+  EVM(network: arbitrum) {
+    DEXTrades(
+      limit: {count: $limit}
+      orderBy: {descending: Block_Time}
+    ) {
+      Transaction { Hash }
+      Block { Time }
+      Trade {
+        Dex { ProtocolName ProtocolFamily }
+        Buy {
+          Currency { SmartContract Symbol }
+        }
+        Sell {
+          Currency { SmartContract Symbol }
+        }
+      }
+    }
+  }
+}`;
+    try {
+      const data = await this.query<{
+        EVM?: {
+          DEXTrades?: Array<{
+            Transaction?: { Hash?: string };
+            Block?: { Time?: string };
+            Trade?: {
+              Dex?: { ProtocolName?: string; ProtocolFamily?: string };
+              Buy?: { Currency?: { SmartContract?: string; Symbol?: string } };
+              Sell?: { Currency?: { SmartContract?: string; Symbol?: string } };
+            };
+          }>;
+        };
+      }>(q, { limit });
+
+      const map = new Map<string, HotPair>();
+      for (const row of data?.EVM?.DEXTrades ?? []) {
+        const a = row.Trade?.Sell?.Currency?.SmartContract;
+        const b = row.Trade?.Buy?.Currency?.SmartContract;
+        if (!a || !b) continue;
+        if (wethOnly && !isWethPair(a, b)) continue;
+        const [lo, hi] =
+          a.toLowerCase() < b.toLowerCase() ? [a, b] : [b, a];
+        const key = `${lo.toLowerCase()}_${hi.toLowerCase()}`;
+        const prev = map.get(key);
+        if (prev) {
+          prev.tradeCount += 1;
+          prev.lastTx = row.Transaction?.Hash ?? prev.lastTx;
+          prev.lastTime = row.Block?.Time ?? prev.lastTime;
+        } else {
+          const sellIsLo = a.toLowerCase() === lo.toLowerCase();
+          map.set(key, {
+            tokenA: lo,
+            tokenB: hi,
+            symbolA: sellIsLo
+              ? row.Trade?.Sell?.Currency?.Symbol
+              : row.Trade?.Buy?.Currency?.Symbol,
+            symbolB: sellIsLo
+              ? row.Trade?.Buy?.Currency?.Symbol
+              : row.Trade?.Sell?.Currency?.Symbol,
+            protocol: row.Trade?.Dex?.ProtocolName ?? row.Trade?.Dex?.ProtocolFamily,
+            tradeCount: 1,
+            lastTx: row.Transaction?.Hash,
+            lastTime: row.Block?.Time,
+          });
+        }
+      }
+      return [...map.values()].sort((x, y) => y.tradeCount - x.tradeCount);
+    } catch (e) {
+      logger.warn(
+        `recentHotPairs failed: ${e instanceof Error ? e.message : String(e)}`
+      );
+      return [];
+    }
   }
 }
 

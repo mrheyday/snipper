@@ -12,6 +12,8 @@ import {
   WETH_ARBITRUM,
   type Unsubscribe,
 } from './bitquery';
+import { isSnipePairAllowed, isRouterAllowed } from './allowlist';
+import { SWAP_ROUTER_ADDRESS } from './config';
 
 loadEnvironmentVariables();
 
@@ -43,12 +45,13 @@ export const buildERC20TokenWithContract = async (
       balanceOf(a: string): Promise<bigint>; allowance(o:string,s:string):Promise<bigint>;
       approve(s:string,a:bigint):Promise<ethers.ContractTransactionResponse>;
     };
-    const [name, symbol, decimals] = await Promise.all([
+    const [name, symbol, decimalsRaw] = await Promise.all([
       contract.name(),
       contract.symbol(),
       contract.decimals(),
     ]);
-    if (!name || !symbol || decimals === undefined) {
+    const decimals = Number(decimalsRaw);
+    if (!name || !symbol || !Number.isFinite(decimals) || decimals < 0 || decimals > 255) {
       logger.warn('Token at ' + checksummedAddress + ' missing required fields');
       return null;
     }
@@ -101,13 +104,20 @@ async function tokensFromPool(ev: PoolCreatedEvent): Promise<Tokens> {
 
 export const getTokens = async (opts?: { wethOnly?: boolean }): Promise<Tokens> => {
   try {
+    if (!isRouterAllowed(SWAP_ROUTER_ADDRESS)) {
+      logger.error(`SWAP_ROUTER_ADDRESS not allowlisted: ${SWAP_ROUTER_ADDRESS}`);
+      return { Token0: null, Token1: null };
+    }
     if (!bitquery.configured) {
       logger.error('BITQUERY_TOKEN not set');
       return { Token0: null, Token1: null };
     }
     const wethOnly = opts?.wethOnly !== false;
-    const pools = await bitquery.latestPoolCreated({ wethOnly, limit: 10 });
-    if (!pools.length) {
+    const pools = await bitquery.latestPoolCreated({ wethOnly, limit: 20 });
+    // Prefer first allowlisted snipe pair (base flash token + target)
+    const pick =
+      pools.find((p) => isSnipePairAllowed(p.token0, p.token1)) ?? pools[0];
+    if (!pick) {
       logger.error(
         wethOnly
           ? 'No recent WETH-paired PoolCreated events'
@@ -115,7 +125,12 @@ export const getTokens = async (opts?: { wethOnly?: boolean }): Promise<Tokens> 
       );
       return { Token0: null, Token1: null };
     }
-    const pick = pools[0];
+    if (!isSnipePairAllowed(pick.token0, pick.token1)) {
+      logger.warn(
+        `Pool ${pick.token0}/${pick.token1} not on snipe allowlist — skipping`
+      );
+      return { Token0: null, Token1: null };
+    }
     logger.info(
       'Detected pool: ' +
         pick.token0 +
@@ -160,6 +175,12 @@ export const subscribeToTokens = (
     async (pool) => {
       try {
         if (opts?.wethOnly !== false && !isWethPair(pool.token0, pool.token1, WETH_ARBITRUM)) {
+          return;
+        }
+        if (!isSnipePairAllowed(pool.token0, pool.token1)) {
+          logger.info(
+            `skip deny/allowlist pool ${pool.token0.slice(0, 10)}… / ${pool.token1.slice(0, 10)}…`
+          );
           return;
         }
         logger.info(
