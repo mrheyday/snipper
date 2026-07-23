@@ -31,6 +31,7 @@ const PERMIT2_ADDRESS = validateAndChecksumAddress(
 
 /**
  * Arbitrum One production deploy (2026-07-23) — verified on Arbiscan.
+ * Constructor args match contracts/src/DeployRegistry.sol.
  * Override via env for forks / redeploys.
  */
 export const ARBITRUM_DEPLOY = {
@@ -39,11 +40,49 @@ export const ARBITRUM_DEPLOY = {
   sniperSearcher: '0xAC7465949D3178C9F13d629c6417b2a02D50DdC8',
   flashLoanReceiver: '0xdce71b4f28dcc5686B3B4e8790bD6051345A89b8',
   delegatedExecutor: '0xc7a5B0873CB174A78017A66b541B24be64fBAde4',
-  /** Vectorized BEBE CREATE2 (canonical multi-target batch). */
+  /** Vectorized BEBE CREATE2 (canonical multi-target batch; no constructor). */
   bebe: '0x00000000BEBEDB7C30ee418158e26E31a5A8f3E2',
   swapRouter02: '0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45',
   aaveV3Pool: '0x794a61358D6845594F94dc1DB02A252b5b4814aD',
   minAmountBitLength: 0,
+  /** Registered constructor arguments used at deploy. */
+  constructors: {
+    sniperSearcher: {
+      types: ['address', 'uint256'] as const,
+      args: [
+        '0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45', // SwapRouter02
+        0n, // minAmountBitLength
+      ] as const,
+      /** ABI-encoded (no 0x offset) for forge verify --constructor-args */
+      encoded:
+        '0x00000000000000000000000068b3465833fb72a70ecdf485e0e4c7bd8665fc450000000000000000000000000000000000000000000000000000000000000000',
+    },
+    delegatedExecutor: {
+      types: ['uint256'] as const,
+      args: [0n] as const,
+      encoded:
+        '0x0000000000000000000000000000000000000000000000000000000000000000',
+    },
+    flashLoanReceiver: {
+      types: ['address', 'address'] as const,
+      args: [
+        '0xAC7465949D3178C9F13d629c6417b2a02D50DdC8', // SniperSearcher
+        '0x794a61358D6845594F94dc1DB02A252b5b4814aD', // Aave V3 Pool
+      ] as const,
+      encoded:
+        '0x000000000000000000000000ac7465949d3178c9f13d629c6417b2a02d50ddc8000000000000000000000000794a61358d6845594f94dc1db02a252b5b4814ad',
+    },
+    basicEoaBatchExecutor: {
+      types: [] as const,
+      args: [] as const,
+      encoded: '0x',
+    },
+  },
+  /** Expected post-deploy permissions. */
+  permissions: {
+    sniperAllowsFlash: true,
+    delegatedAllowsOwnerEoa: true,
+  },
 } as const;
 
 const SNIPER_SEARCHER_ADDRESS = validateAndChecksumAddress(

@@ -1,0 +1,73 @@
+{
+  "network": "arbitrum-one",
+  "chainId": 42161,
+  "deployedAt": "2026-07-23",
+  "owner": "0x00000001386687D89e6A36aE01C5e5F75acF61Af",
+  "registry": "contracts/src/DeployRegistry.sol",
+  "contracts": {
+    "SniperSearcher": {
+      "address": "0xAC7465949D3178C9F13d629c6417b2a02D50DdC8",
+      "constructor": {
+        "signature": "constructor(address _swapRouter, uint256 _minAmountBitLength)",
+        "args": {
+          "_swapRouter": "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45",
+          "_minAmountBitLength": "0"
+        },
+        "encoded": "0x00000000000000000000000068b3465833fb72a70ecdf485e0e4c7bd8665fc450000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "immutables": {
+        "swapRouter": "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45",
+        "minAmountBitLength": "0",
+        "chainId": "42161"
+      },
+      "tx": "0x72b806ee1b47136d1c8b9c323e6fbf234ca94c0cdfee1167654d02010fe4cd9b",
+      "arbiscan": "https://arbiscan.io/address/0xAC7465949D3178C9F13d629c6417b2a02D50DdC8"
+    },
+    "DelegatedExecutor": {
+      "address": "0xc7a5B0873CB174A78017A66b541B24be64fBAde4",
+      "constructor": {
+        "signature": "constructor(uint256 _minAmountBitLength)",
+        "args": {
+          "_minAmountBitLength": "0"
+        },
+        "encoded": "0x0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "immutables": {
+        "minAmountBitLength": "0"
+      },
+      "tx": "0xad9840aa16f003fe193bcfcd6c76fd938038ea9d8a544b76eb82a09a673d01b8",
+      "arbiscan": "https://arbiscan.io/address/0xc7a5B0873CB174A78017A66b541B24be64fBAde4"
+    },
+    "FlashLoanReceiver": {
+      "address": "0xdce71b4f28dcc5686B3B4e8790bD6051345A89b8",
+      "constructor": {
+        "signature": "constructor(address _swapExecutor, address _lendingPool)",
+        "args": {
+          "_swapExecutor": "0xAC7465949D3178C9F13d629c6417b2a02D50DdC8",
+          "_lendingPool": "0x794a61358D6845594F94dc1DB02A252b5b4814aD"
+        },
+        "encoded": "0x000000000000000000000000ac7465949d3178c9f13d629c6417b2a02d50ddc8000000000000000000000000794a61358d6845594f94dc1db02a252b5b4814ad"
+      },
+      "immutables": {
+        "swapExecutor": "0xAC7465949D3178C9F13d629c6417b2a02D50DdC8",
+        "lendingPool": "0x794a61358D6845594F94dc1DB02A252b5b4814aD"
+      },
+      "tx": "0x6a025ec9dfde5310580be80ad873856d865dda9816cc45b49a3d5c1171b51374",
+      "arbiscan": "https://arbiscan.io/address/0xdce71b4f28dcc5686B3B4e8790bD6051345A89b8"
+    },
+    "BasicEOABatchExecutor": {
+      "address": "0x00000000BEBEDB7C30ee418158e26E31a5A8f3E2",
+      "constructor": {
+        "signature": "constructor()",
+        "args": {},
+        "encoded": "0x"
+      },
+      "note": "Canonical Vectorized BEBE CREATE2 — not redeployed"
+    }
+  },
+  "onChainConfig": {
+    "sniperAllowsFlashLoanReceiver": true,
+    "delegatedAllowsOwnerEoa": true,
+    "configureScript": "script/Configure.s.sol"
+  }
+}

@@ -5,22 +5,18 @@ import {Script, console} from "forge-std/Script.sol";
 import {SniperSearcher} from "../src/SniperSearcher.sol";
 import {FlashLoanReceiver} from "../src/FlashLoanReceiver.sol";
 import {DelegatedExecutor} from "../src/DelegatedExecutor.sol";
+import {DeployRegistry} from "../src/DeployRegistry.sol";
 
 /**
  * @title Verify
- * @notice Post-deployment verification — hard-fails on wiring mismatches.
+ * @notice Post-deployment verification — hard-fails on wiring / constructor mismatches.
  *
- *   forge script script/Verify.s.sol --rpc-url arbitrum
+ *   forge script script/Verify.s.sol --rpc-url $RPC
  *
- * Env: SNIPER_SEARCHER_ADDRESS, FLASH_LOAN_RECEIVER_ADDRESS, DELEGATED_EXECUTOR_ADDRESS
- * Optional: BATCH_EXECUTOR_ADDRESS (defaults to canonical BEBE)
+ * Env optional (defaults DeployRegistry production addresses):
+ *   SNIPER_SEARCHER_ADDRESS, FLASH_LOAN_RECEIVER_ADDRESS, DELEGATED_EXECUTOR_ADDRESS, BATCH_EXECUTOR_ADDRESS
  */
 contract Verify is Script {
-    address constant SWAP_ROUTER = 0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45;
-    address constant AAVE_POOL_ARBITRUM = 0x794a61358D6845594F94dc1DB02A252b5b4814aD;
-    address constant AAVE_POOL_SEPOLIA = 0xB9C5a95a8f8D7ad8E64d64eF53e6aBaA40a5bF18;
-    address constant CANONICAL_BEBE = 0x00000000BEBEDB7C30ee418158e26E31a5A8f3E2;
-
     function run() external view {
         console.log("");
         console.log("=============================================================");
@@ -28,43 +24,53 @@ contract Verify is Script {
         console.log("=============================================================");
         console.log("");
 
-        address sniperSearcher = vm.envAddress("SNIPER_SEARCHER_ADDRESS");
-        address flashLoanReceiver = vm.envAddress("FLASH_LOAN_RECEIVER_ADDRESS");
-        address delegatedExecutor = vm.envAddress("DELEGATED_EXECUTOR_ADDRESS");
-        address batchExecutor = CANONICAL_BEBE;
-        try vm.envAddress("BATCH_EXECUTOR_ADDRESS") returns (address b) {
-            if (b != address(0)) batchExecutor = b;
-        } catch {}
+        address sniperSearcher = _envOr("SNIPER_SEARCHER_ADDRESS", DeployRegistry.SNIPER_SEARCHER);
+        address flashLoanReceiver = _envOr("FLASH_LOAN_RECEIVER_ADDRESS", DeployRegistry.FLASH_LOAN_RECEIVER);
+        address delegatedExecutor = _envOr("DELEGATED_EXECUTOR_ADDRESS", DeployRegistry.DELEGATED_EXECUTOR);
+        address batchExecutor = _envOr("BATCH_EXECUTOR_ADDRESS", DeployRegistry.BEBE);
 
         console.log("Chain:", block.chainid);
-        require(block.chainid == 42161 || block.chainid == 421614, "unsupported chain");
+        require(
+            block.chainid == DeployRegistry.CHAIN_ID_ARBITRUM
+                || block.chainid == DeployRegistry.CHAIN_ID_ARBITRUM_SEPOLIA,
+            "unsupported chain"
+        );
 
-        address expectedPool = block.chainid == 42161 ? AAVE_POOL_ARBITRUM : AAVE_POOL_SEPOLIA;
+        address expectedPool = DeployRegistry.aavePoolForChain(block.chainid);
 
-        // --- SniperSearcher ---
+        // --- SniperSearcher (constructor: swapRouter, minAmountBitLength) ---
         require(_isContract(sniperSearcher), "SniperSearcher: no code");
         SniperSearcher ss = SniperSearcher(payable(sniperSearcher));
-        require(ss.swapRouter() == SWAP_ROUTER, "SniperSearcher: bad swapRouter");
+        require(ss.swapRouter() == DeployRegistry.SWAP_ROUTER, "SniperSearcher: bad swapRouter");
+        require(
+            ss.minAmountBitLength() == DeployRegistry.MIN_AMOUNT_BIT_LENGTH, "SniperSearcher: minBits"
+        );
         require(ss.chainId() == block.chainid, "SniperSearcher: chainId mismatch");
         require(ss.allowedExecutors(flashLoanReceiver), "SniperSearcher: Flash not allowedExecutor");
-        console.log("[PASS] SniperSearcher wiring");
+        console.log("[PASS] SniperSearcher wiring + constructor");
         console.log("       owner=", ss.owner());
+        console.log("       swapRouter=", ss.swapRouter());
         console.log("       minAmountBitLength=", ss.minAmountBitLength());
 
-        // --- FlashLoanReceiver ---
+        // --- FlashLoanReceiver (constructor: swapExecutor, lendingPool) ---
         require(_isContract(flashLoanReceiver), "FlashLoanReceiver: no code");
         FlashLoanReceiver flr = FlashLoanReceiver(payable(flashLoanReceiver));
         require(flr.swapExecutor() == sniperSearcher, "Flash: swapExecutor != Sniper");
         require(flr.lendingPool() == expectedPool, "Flash: bad lendingPool");
         require(flr.owner() == ss.owner(), "Flash: owner != Sniper owner");
-        console.log("[PASS] FlashLoanReceiver wiring");
+        console.log("[PASS] FlashLoanReceiver wiring + constructor");
         console.log("       owner=", flr.owner());
+        console.log("       swapExecutor=", flr.swapExecutor());
+        console.log("       lendingPool=", flr.lendingPool());
 
-        // --- DelegatedExecutor ---
+        // --- DelegatedExecutor (constructor: minAmountBitLength) ---
         require(_isContract(delegatedExecutor), "DelegatedExecutor: no code");
         DelegatedExecutor de = DelegatedExecutor(payable(delegatedExecutor));
         require(de.owner() == ss.owner(), "DelegatedExecutor: owner mismatch");
-        console.log("[PASS] DelegatedExecutor");
+        require(
+            de.minAmountBitLength() == DeployRegistry.MIN_AMOUNT_BIT_LENGTH, "Delegated: minBits"
+        );
+        console.log("[PASS] DelegatedExecutor wiring + constructor");
         console.log("       owner=", de.owner());
         console.log("       minAmountBitLength=", de.minAmountBitLength());
 
@@ -72,13 +78,20 @@ contract Verify is Script {
         require(_isContract(batchExecutor), "BATCH_EXECUTOR: no code");
         console.log("[PASS] Batch executor has code");
         console.log("       address=", batchExecutor);
-        if (batchExecutor == CANONICAL_BEBE) {
+        if (batchExecutor == DeployRegistry.BEBE) {
             console.log("       (canonical Vectorized BEBE)");
         }
 
         console.log("");
         console.log("[PASS] All production wiring checks passed");
         console.log("");
+    }
+
+    function _envOr(string memory key, address fallbackAddr) internal view returns (address) {
+        try vm.envAddress(key) returns (address a) {
+            if (a != address(0)) return a;
+        } catch {}
+        return fallbackAddr;
     }
 
     function _isContract(address addr) internal view returns (bool) {

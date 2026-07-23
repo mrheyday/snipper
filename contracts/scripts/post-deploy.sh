@@ -136,9 +136,19 @@ echo ""
 # ---------------------------------------------------------------------------
 # Step 4: Forge Verify.s.sol
 # ---------------------------------------------------------------------------
-echo -e "${BLUE}Step 4: forge script Verify.s.sol${NC}"
+echo -e "${BLUE}Step 4: forge script Configure.s.sol + Verify.s.sol${NC}"
 cd "$CONTRACTS_DIR"
 export SNIPER_SEARCHER_ADDRESS FLASH_LOAN_RECEIVER_ADDRESS DELEGATED_EXECUTOR_ADDRESS BATCH_EXECUTOR_ADDRESS
+# Configure audits constructor registry + ensures allowlist (broadcast only if PRIVATE_KEY set)
+if forge script script/Configure.s.sol --rpc-url "$RPC_URL" 2>&1 | tee /tmp/configure-out.txt | tail -40; then
+  if grep -q "Configure complete" /tmp/configure-out.txt; then
+    pass "Configure.s.sol constructor audit + permissions"
+  else
+    fail "Configure.s.sol incomplete"
+  fi
+else
+  fail "Configure.s.sol failed"
+fi
 if forge script script/Verify.s.sol --rpc-url "$RPC_URL" 2>&1 | tee /tmp/verify-out.txt | tail -30; then
   if grep -q "All production wiring checks passed" /tmp/verify-out.txt; then
     pass "Verify.s.sol hard checks passed"
