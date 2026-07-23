@@ -10,7 +10,7 @@ interface IERC20Like {
     function balanceOf(address account) external view returns (uint256);
 }
 
-/// @dev Uniswap V3 SwapRouter02 exactInput — struct form, NO per-call deadline.
+/// @dev Uniswap-V3-style SwapRouter02 exactInput — struct form, NO per-call deadline.
 ///      Selector: exactInput((bytes,address,uint256,uint256)) = 0xb858183f
 ///      Deadlines are enforced in this contract (see DeadlineExceeded checks).
 interface IUniswapV3Router02 {
@@ -32,19 +32,19 @@ error InvalidPath();
 error TokenInMismatch(address expected, address pathTokenIn);
 error CallbackDisabled();
 error ZeroAddress();
+error RouterNotAllowed(address router);
+error NoRoutersProvided();
 
 /// @title DelegatedExecutor
 /// @notice Contract for EIP-7702 EOA delegation
 /// @dev Allows EOA to execute swaps without pre-deployment via account code delegation
 contract DelegatedExecutor is Multicallable {
-    // Uniswap V3 SwapRouter02 on Arbitrum
-    address constant SWAP_ROUTER = 0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45;
-
     // Reentrancy guard using transient storage (0.8.28+)
     bytes32 private transient locked;
 
     // Access control: mapping of allowed EOAs
     mapping(address eoa => bool allowed) public allowedEOAs;
+    mapping(address router => bool allowed) public allowedRouters;
     address public owner;
 
     /// @notice Minimum bit-length (via the native CLZ opcode) an `amountIn` must have to
@@ -56,6 +56,8 @@ contract DelegatedExecutor is Multicallable {
     event Delegated(address indexed eoa, bytes32 nonce);
     event EOAAllowed(address indexed eoa);
     event EOARevoked(address indexed eoa);
+    event RouterAllowed(address indexed router);
+    event RouterRevoked(address indexed router);
 
     // Reentrancy guard modifier using transient storage
     modifier nonReentrant() {
@@ -100,9 +102,15 @@ contract DelegatedExecutor is Multicallable {
         _;
     }
 
-    constructor(uint256 _minAmountBitLength) {
+    constructor(address[] memory initialRouters, uint256 _minAmountBitLength) {
+        if (initialRouters.length == 0) revert NoRoutersProvided();
         owner = msg.sender;
         allowedEOAs[msg.sender] = true;
+        for (uint256 i = 0; i < initialRouters.length; ++i) {
+            if (initialRouters[i] == address(0)) revert ZeroAddress();
+            allowedRouters[initialRouters[i]] = true;
+            emit RouterAllowed(initialRouters[i]);
+        }
         minAmountBitLength = _minAmountBitLength;
     }
 
@@ -119,19 +127,36 @@ contract DelegatedExecutor is Multicallable {
         emit EOARevoked(eoa);
     }
 
+    /// @notice Allow a router to be used as the swap venue
+    function allowRouter(address router) external onlyOwner {
+        if (router == address(0)) revert ZeroAddress();
+        allowedRouters[router] = true;
+        emit RouterAllowed(router);
+    }
+
+    /// @notice Revoke a router
+    function revokeRouter(address router) external onlyOwner {
+        allowedRouters[router] = false;
+        emit RouterRevoked(router);
+    }
+
     /// @notice Execute swap via EIP-7702 delegation
     /// @dev Called when EOA code points to this contract (via SetCode tx)
     /// @param tokenIn Input token
+    /// @param router Allowlisted Uniswap-V3-style router to swap against
     /// @param amountIn Input amount
     /// @param path Encoded swap path
     /// @param minAmountOut Minimum output
     /// @param deadline Tx deadline
-    function executeSwap(address tokenIn, uint256 amountIn, bytes calldata path, uint256 minAmountOut, uint256 deadline)
-        external
-        nonReentrant
-        onlyAllowedEOA
-        returns (uint256 amountOut)
-    {
+    function executeSwap(
+        address tokenIn,
+        address router,
+        uint256 amountIn,
+        bytes calldata path,
+        uint256 minAmountOut,
+        uint256 deadline
+    ) external nonReentrant onlyAllowedEOA returns (uint256 amountOut) {
+        if (!allowedRouters[router]) revert RouterNotAllowed(router);
         if (block.timestamp > deadline) revert DeadlineExceeded();
         _checkMinAmount(amountIn);
         _validatePath(tokenIn, path);
@@ -140,10 +165,10 @@ contract DelegatedExecutor is Multicallable {
         // they are pulled from msg.sender into this contract first.
         _pullIn(tokenIn, amountIn);
 
-        SafeTransferLib.safeApproveWithRetry(tokenIn, SWAP_ROUTER, amountIn);
+        SafeTransferLib.safeApproveWithRetry(tokenIn, router, amountIn);
 
         // SwapRouter02 struct exactInput (0xb858183f) — recipient is this account under 7702.
-        try IUniswapV3Router02(SWAP_ROUTER).exactInput(
+        try IUniswapV3Router02(router).exactInput(
             IUniswapV3Router02.ExactInputParams({
                 path: path,
                 recipient: _recipient(),
@@ -156,7 +181,7 @@ contract DelegatedExecutor is Multicallable {
             revert SwapFailed();
         }
 
-        SafeTransferLib.safeApprove(tokenIn, SWAP_ROUTER, 0);
+        SafeTransferLib.safeApprove(tokenIn, router, 0);
 
         // Under 7702 funds stay on the EOA; external allowlisted callers get tokenOut back.
         address tokenOut = _getTokenOut(path);
@@ -172,12 +197,14 @@ contract DelegatedExecutor is Multicallable {
     /// @dev Callbacks are restricted to whitelisted functions for security
     function executeSwapWithCallback(
         address tokenIn,
+        address router,
         uint256 amountIn,
         bytes calldata path,
         uint256 minAmountOut,
         uint256 deadline,
         bytes calldata callbackData
     ) external nonReentrant onlyAllowedEOA returns (uint256 amountOut) {
+        if (!allowedRouters[router]) revert RouterNotAllowed(router);
         if (block.timestamp > deadline) revert DeadlineExceeded();
         _checkMinAmount(amountIn);
         _validatePath(tokenIn, path);
@@ -185,9 +212,9 @@ contract DelegatedExecutor is Multicallable {
         if (callbackData.length > 0) revert CallbackDisabled();
 
         _pullIn(tokenIn, amountIn);
-        SafeTransferLib.safeApproveWithRetry(tokenIn, SWAP_ROUTER, amountIn);
+        SafeTransferLib.safeApproveWithRetry(tokenIn, router, amountIn);
 
-        try IUniswapV3Router02(SWAP_ROUTER).exactInput(
+        try IUniswapV3Router02(router).exactInput(
             IUniswapV3Router02.ExactInputParams({
                 path: path,
                 recipient: _recipient(),
@@ -200,7 +227,7 @@ contract DelegatedExecutor is Multicallable {
             revert SwapFailed();
         }
 
-        SafeTransferLib.safeApprove(tokenIn, SWAP_ROUTER, 0);
+        SafeTransferLib.safeApprove(tokenIn, router, 0);
 
         // Output already on this account under 7702; when called externally, forward it.
         address tokenOut = _getTokenOut(path);
@@ -211,7 +238,7 @@ contract DelegatedExecutor is Multicallable {
         emit Swap(tokenIn, tokenOut, amountIn, amountOut);
     }
 
-    /// @notice Batch execute multiple swaps atomically
+    /// @notice Batch execute multiple swaps atomically, all against the same router
     /// @dev All swaps execute in order; if one fails, entire transaction reverts
     struct SwapRequest {
         address tokenIn;
@@ -220,12 +247,13 @@ contract DelegatedExecutor is Multicallable {
         uint256 minAmountOut;
     }
 
-    function executeBatchSwaps(SwapRequest[] calldata swaps, uint256 deadline)
+    function executeBatchSwaps(SwapRequest[] calldata swaps, address router, uint256 deadline)
         external
         nonReentrant
         onlyAllowedEOA
         returns (uint256[] memory amountsOut)
     {
+        if (!allowedRouters[router]) revert RouterNotAllowed(router);
         if (block.timestamp > deadline) revert DeadlineExceeded();
 
         amountsOut = new uint256[](swaps.length);
@@ -236,9 +264,9 @@ contract DelegatedExecutor is Multicallable {
             _validatePath(swap.tokenIn, swap.path);
 
             _pullIn(swap.tokenIn, swap.amountIn);
-            SafeTransferLib.safeApproveWithRetry(swap.tokenIn, SWAP_ROUTER, swap.amountIn);
+            SafeTransferLib.safeApproveWithRetry(swap.tokenIn, router, swap.amountIn);
 
-            try IUniswapV3Router02(SWAP_ROUTER).exactInput(
+            try IUniswapV3Router02(router).exactInput(
                 IUniswapV3Router02.ExactInputParams({
                     path: swap.path,
                     recipient: _recipient(),
@@ -251,7 +279,7 @@ contract DelegatedExecutor is Multicallable {
                 revert SwapFailed();
             }
 
-            SafeTransferLib.safeApprove(swap.tokenIn, SWAP_ROUTER, 0);
+            SafeTransferLib.safeApprove(swap.tokenIn, router, 0);
 
             address tokenOut = _getTokenOut(swap.path);
             if (msg.sender != address(this)) {

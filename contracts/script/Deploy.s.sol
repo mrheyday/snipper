@@ -66,10 +66,12 @@ contract Deploy is Script {
         SniperSearcher sniperSearcher = new SniperSearcher(initialRouters, minAmountBitLength);
         console.log("    [OK] SniperSearcher deployed to:", address(sniperSearcher));
 
-        // 2. Deploy DelegatedExecutor(minAmountBitLength)
+        // 2. Deploy DelegatedExecutor(initialRouters[], minAmountBitLength)
         console.log("[2] Deploying DelegatedExecutor...");
         console.logBytes(DeployRegistry.delegatedConstructorArgsEncoded());
-        DelegatedExecutor delegatedExecutor = new DelegatedExecutor(minAmountBitLength);
+        address[] memory delegatedRouters = new address[](1);
+        delegatedRouters[0] = swapRouter;
+        DelegatedExecutor delegatedExecutor = new DelegatedExecutor(delegatedRouters, minAmountBitLength);
         console.log("    [OK] DelegatedExecutor deployed to:", address(delegatedExecutor));
 
         // 3. Deploy FlashLoanReceiver(sniper, aavePool)
