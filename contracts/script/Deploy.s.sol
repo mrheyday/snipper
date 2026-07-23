@@ -5,11 +5,12 @@ import {Script, console} from "forge-std/Script.sol";
 import {SniperSearcher} from "../src/SniperSearcher.sol";
 import {FlashLoanReceiver} from "../src/FlashLoanReceiver.sol";
 import {DelegatedExecutor} from "../src/DelegatedExecutor.sol";
+import {BasicEOABatchExecutor} from "../src/BasicEOABatchExecutor.sol";
 
 /**
  * @title Deploy
  * @notice Complete deployment script for Arbitrum Sniper Bot contracts
- * @dev Deploys SniperSearcher, FlashLoanReceiver, and DelegatedExecutor
+ * @dev Deploys SniperSearcher, FlashLoanReceiver, DelegatedExecutor, BasicEOABatchExecutor
  *
  * Usage:
  *   Dry run on Arbitrum:
@@ -33,6 +34,7 @@ contract Deploy is Script {
         address sniperSearcher;
         address flashLoanReceiver;
         address delegatedExecutor;
+        address basicEoaBatchExecutor;
         address swapRouter;
         address aavePool;
     }
@@ -85,6 +87,13 @@ contract Deploy is Script {
         FlashLoanReceiver flashLoanReceiver = new FlashLoanReceiver(address(sniperSearcher), aavePool);
         console.log("    [OK] FlashLoanReceiver deployed to:", address(flashLoanReceiver));
 
+        // 4. Deploy BasicEOABatchExecutor (BEBE) — multi-target CALL batching for EIP-7702.
+        //    When an EOA delegates here, `execute(mode, executionData)` can CALL any
+        //    `(to, value, data)` list (router, Aave, tokens, etc.) under the EOA context.
+        console.log("[4] Deploying BasicEOABatchExecutor (multi-target)...");
+        BasicEOABatchExecutor basicEoaBatchExecutor = new BasicEOABatchExecutor();
+        console.log("    [OK] BasicEOABatchExecutor deployed to:", address(basicEoaBatchExecutor));
+
         vm.stopBroadcast();
 
         // Print summary
@@ -94,22 +103,28 @@ contract Deploy is Script {
         console.log("[OK] All contracts deployed successfully!");
         console.log("");
         console.log("Contract Addresses:");
-        console.log("  SniperSearcher:      ", address(sniperSearcher));
-        console.log("  FlashLoanReceiver:   ", address(flashLoanReceiver));
-        console.log("  DelegatedExecutor:   ", address(delegatedExecutor));
+        console.log("  SniperSearcher:         ", address(sniperSearcher));
+        console.log("  FlashLoanReceiver:      ", address(flashLoanReceiver));
+        console.log("  DelegatedExecutor:      ", address(delegatedExecutor));
+        console.log("  BasicEOABatchExecutor:  ", address(basicEoaBatchExecutor));
         console.log("");
         console.log("Configuration:");
-        console.log("  SwapRouter:          ", SWAP_ROUTER);
-        console.log("  AavePool:            ", aavePool);
-        console.log("  Owner:               ", deployer);
+        console.log("  SwapRouter:             ", SWAP_ROUTER);
+        console.log("  AavePool:               ", aavePool);
+        console.log("  Owner:                  ", deployer);
+        console.log("");
+        console.log("EIP-7702 roles:");
+        console.log("  DelegatedExecutor       = single-target Uniswap swaps (hardcoded router)");
+        console.log("  BasicEOABatchExecutor   = multi-target CALL batch (any contract)");
         console.log("");
         console.log("Next Steps:");
         console.log("  1. Save these addresses to your .env file");
         console.log("  2. Update SNIPER_SEARCHER_ADDRESS=", address(sniperSearcher));
         console.log("  3. Update FLASH_LOAN_RECEIVER_ADDRESS=", address(flashLoanReceiver));
         console.log("  4. Update DELEGATED_EXECUTOR_ADDRESS=", address(delegatedExecutor));
-        console.log("  5. Run integration tests with deployed contracts");
-        console.log("  6. Monitor initial transactions carefully");
+        console.log("  5. Update BATCH_EXECUTOR_ADDRESS=", address(basicEoaBatchExecutor));
+        console.log("  6. Run integration tests with deployed contracts");
+        console.log("  7. Monitor initial transactions carefully");
         console.log("");
 
         // Store addresses for later use
@@ -118,6 +133,7 @@ contract Deploy is Script {
                 sniperSearcher: address(sniperSearcher),
                 flashLoanReceiver: address(flashLoanReceiver),
                 delegatedExecutor: address(delegatedExecutor),
+                basicEoaBatchExecutor: address(basicEoaBatchExecutor),
                 swapRouter: SWAP_ROUTER,
                 aavePool: aavePool
             })
@@ -128,7 +144,7 @@ contract Deploy is Script {
      * Internal: Log deployment addresses to console
      */
     function _saveDeploymentAddresses(DeploymentAddresses memory addresses) internal pure {
-        // Note: In a real deployment, you might write these to a file
-        // For now, they're logged above
+        // Addresses are logged above; kept for future file persistence.
+        addresses;
     }
 }

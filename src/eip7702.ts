@@ -21,6 +21,30 @@ const DELEGATED_EXECUTOR_IFACE = new ethers.utils.Interface([
   'function allowedEOAs(address eoa) view returns (bool)',
 ]);
 
+/** ERC-7821 / BEBE multi-target batch executor (BasicEOABatchExecutor). */
+const BATCH_EXECUTOR_IFACE = new ethers.utils.Interface([
+  'function execute(bytes32 mode, bytes executionData) payable',
+  'function supportsExecutionMode(bytes32 mode) view returns (bool)',
+  'function isValidSignature(bytes32 hash, bytes signature) view returns (bytes4)',
+]);
+
+/**
+ * ERC-7821 single-batch mode without opData.
+ * Bytes: [0]=0x01 batch, [1]=0x00 revert-on-fail, rest zero / reserved.
+ * Auth rule in Solady ERC7821: empty opData requires msg.sender == address(this)
+ * which is exactly the EIP-7702 self-call pattern.
+ */
+export const ERC7821_MODE_BATCH_NO_OPDATA =
+  '0x0100000000000000000000000000000000000000000000000000000000000000';
+
+/** One CALL from the delegated EOA to an arbitrary target contract. */
+export interface BatchCall {
+  /** Target contract. address(0) is rewritten to address(this) by ERC7821. */
+  to: string;
+  value?: BigNumber;
+  data: string;
+}
+
 export interface Authorization {
   chainId: number;
   address: string;
@@ -646,6 +670,218 @@ export class EIP7702TransactionBuilder {
   }
 }
 
+
+// ---------------------------------------------------------------------------
+// Multi-target delegation: BasicEOABatchExecutor (ERC-7821 / BEBE)
+// ---------------------------------------------------------------------------
+
+/**
+ * Encode ERC-7821 execute(mode, abi.encode(calls)) calldata for a multi-target
+ * batch. Each call is a real CALL from the EOA (under 7702) to any contract
+ * with value and data — routers, Aave, ERC20 approve, etc.
+ */
+export function encodeBatchExecute(calls: BatchCall[]): {
+  mode: string;
+  executionData: string;
+  data: string;
+} {
+  if (!calls.length) {
+    throw new Error('encodeBatchExecute: empty calls');
+  }
+  const normalized = calls.map((c) => ({
+    to: c.to === ZERO_ADDRESS || !c.to ? ZERO_ADDRESS : validateAndChecksumAddress(c.to),
+    value: c.value ?? BigNumber.from(0),
+    data: c.data && c.data !== '' ? c.data : '0x',
+  }));
+  const executionData = ethers.utils.defaultAbiCoder.encode(
+    ['tuple(address to,uint256 value,bytes data)[]'],
+    [normalized]
+  );
+  const mode = ERC7821_MODE_BATCH_NO_OPDATA;
+  const data = BATCH_EXECUTOR_IFACE.encodeFunctionData('execute', [mode, executionData]);
+  return { mode, executionData, data };
+}
+
+/**
+ * EIP-7702 multi-target batch executor.
+ *
+ * Unlike EIP7702Executor (DelegatedExecutor -> hardcoded Uniswap router only),
+ * this authorizes the EOA to BasicEOABatchExecutor and invokes ERC-7821
+ * execute, which issues arbitrary CALLs to any list of contracts.
+ */
+export class BatchEOAExecutor {
+  private batchExecutor: string;
+  private authorizer: EIP7702Authorizer;
+  private authority: Wallet;
+  private chainId: number;
+
+  constructor(
+    batchExecutorAddress: string,
+    chainId: number = CHAIN_ID,
+    authority: Wallet = signer as Wallet
+  ) {
+    this.batchExecutor = validateAndChecksumAddress(batchExecutorAddress);
+    this.chainId = chainId;
+    this.authority = authority;
+    this.authorizer = new EIP7702Authorizer(this.batchExecutor, chainId, authority);
+  }
+
+  getExecutorAddress(): string {
+    return this.batchExecutor;
+  }
+
+  getAuthorizer(): EIP7702Authorizer {
+    return this.authorizer;
+  }
+
+  async getStatus(): Promise<DelegationStatus> {
+    return getDelegationStatus(await this.authority.getAddress());
+  }
+
+  private async feeHints(): Promise<{ tip: BigNumber; maxFee: BigNumber }> {
+    const fee = await provider.getFeeData();
+    const tip = fee.maxPriorityFeePerGas ?? ethers.utils.parseUnits('0.01', 'gwei');
+    const maxFee = fee.maxFeePerGas ?? (await provider.getGasPrice()).mul(2);
+    return { tip, maxFee: maxFee.gt(tip) ? maxFee : tip.mul(2) };
+  }
+
+  /**
+   * Authorize EOA -> BasicEOABatchExecutor and run a multi-target CALL batch.
+   * Each entry in calls is forwarded to an arbitrary contract under EOA context.
+   */
+  async executeBatchCalls(
+    calls: BatchCall[],
+    opts?: { gasLimit?: BigNumber; clearAfter?: boolean }
+  ): Promise<DelegatedSwapResult> {
+    try {
+      const eoa = await this.authority.getAddress();
+      logger.info('EIP-7702 multi-target batch (' + calls.length + ' calls)');
+      logger.info('  EOA: ' + eoa);
+      logger.info('  batchExecutor: ' + this.batchExecutor);
+      for (let i = 0; i < calls.length; i++) {
+        logger.info(
+          '  [' + i + '] to=' + calls[i].to + ' data=' + (calls[i].data || '0x').slice(0, 18) + '...'
+        );
+      }
+
+      const encoded = encodeBatchExecute(calls);
+      const { tip, maxFee } = await this.feeHints();
+      const status = await getDelegationStatus(eoa);
+      const auth = await this.authorizer.createAuthorization(status.nonce);
+
+      const gasLimit =
+        opts?.gasLimit ?? BigNumber.from(150_000 + calls.length * 200_000);
+
+      const sent = await sendType4Transaction(this.authority, {
+        chainId: this.chainId,
+        maxPriorityFeePerGas: tip,
+        maxFeePerGas: maxFee,
+        gasLimit,
+        to: eoa,
+        value: BigNumber.from(0),
+        data: encoded.data,
+        authorizationList: [auth],
+      });
+
+      const receipt = await provider.waitForTransaction(sent.hash, 1, 90_000);
+      if (!receipt) {
+        return {
+          success: false,
+          error: 'multi-target type-4 confirmation timeout',
+          txHash: sent.hash,
+          authorization: auth,
+        };
+      }
+      if (receipt.status === 0) {
+        return {
+          success: false,
+          error: 'multi-target type-4 transaction reverted',
+          txHash: sent.hash,
+          gasUsed: receipt.gasUsed,
+          authorization: auth,
+        };
+      }
+
+      const after = await getDelegationStatus(eoa);
+      logger.info(
+        '  delegated code now: ' +
+          (after.isDelegated ? String(after.delegate) : after.code.slice(0, 24))
+      );
+
+      if (opts?.clearAfter) {
+        const clearAuth = await this.authorizer.createClearAuthorization(
+          (await getDelegationStatus(eoa)).nonce
+        );
+        await sendType4Transaction(this.authority, {
+          chainId: this.chainId,
+          maxPriorityFeePerGas: tip,
+          maxFeePerGas: maxFee,
+          gasLimit: BigNumber.from(100_000),
+          to: eoa,
+          value: BigNumber.from(0),
+          data: '0x',
+          authorizationList: [clearAuth],
+        });
+      }
+
+      return {
+        success: true,
+        txHash: sent.hash,
+        gasUsed: receipt.gasUsed,
+        authorization: auth,
+        delegationCode: after.code,
+      };
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      logger.error('Multi-target batch failed: ' + errorMsg);
+      return { success: false, error: errorMsg };
+    }
+  }
+
+  /**
+   * Convenience: approve token then exactInput on Uniswap V3 SwapRouter02 in one
+   * multi-target batch (approve + swap as two CALLs from the EOA).
+   */
+  async approveAndSwap(params: {
+    tokenIn: string;
+    router: string;
+    amountIn: BigNumber;
+    path: Buffer | string;
+    minAmountOut: BigNumber;
+    gasLimit?: BigNumber;
+  }): Promise<DelegatedSwapResult> {
+    const pathHex =
+      typeof params.path === 'string'
+        ? params.path
+        : bufToHex(Buffer.isBuffer(params.path) ? params.path : Buffer.from(params.path));
+
+    const erc20 = new ethers.utils.Interface([
+      'function approve(address spender, uint256 amount) returns (bool)',
+    ]);
+    const routerIface = new ethers.utils.Interface([
+      'function exactInput(bytes path, address recipient, uint256 amountIn, uint256 amountOutMinimum) payable returns (uint256)',
+    ]);
+
+    const eoa = await this.authority.getAddress();
+    const calls: BatchCall[] = [
+      {
+        to: params.tokenIn,
+        data: erc20.encodeFunctionData('approve', [params.router, params.amountIn]),
+      },
+      {
+        to: params.router,
+        data: routerIface.encodeFunctionData('exactInput', [
+          pathHex,
+          eoa,
+          params.amountIn,
+          params.minAmountOut,
+        ]),
+      },
+    ];
+    return this.executeBatchCalls(calls, { gasLimit: params.gasLimit });
+  }
+}
+
 export default {
   EIP7702Authorizer,
   EIP7702Executor,
@@ -657,4 +893,7 @@ export default {
   isDelegationDesignator,
   parseDelegate,
   sendType4Transaction,
+  encodeBatchExecute,
+  BatchEOAExecutor,
+  ERC7821_MODE_BATCH_NO_OPDATA,
 };

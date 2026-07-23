@@ -39,6 +39,13 @@ const DELEGATED_EXECUTOR_ADDRESS = validateAndChecksumAddress(
   getRequiredEnv('DELEGATED_EXECUTOR_ADDRESS')
 );
 
+// Optional: Solady BEBE / ERC-7821 multi-target batch executor for EIP-7702.
+// When set, enables type-4 calls that CALL arbitrary (to, value, data) lists.
+const BATCH_EXECUTOR_ADDRESS_RAW = getOptionalEnv('BATCH_EXECUTOR_ADDRESS', '');
+const BATCH_EXECUTOR_ADDRESS = BATCH_EXECUTOR_ADDRESS_RAW
+  ? validateAndChecksumAddress(BATCH_EXECUTOR_ADDRESS_RAW)
+  : '';
+
 export const CHAIN_ID = parseInt(getOptionalEnv('CHAIN_ID', '42161'));
 
 const DEADLINE_MINUTES = parseInt(getOptionalEnv('DEADLINE_IN_MINUTES', '30'));
@@ -63,6 +70,7 @@ export {
   SNIPER_SEARCHER_ADDRESS,
   FLASH_LOAN_RECEIVER_ADDRESS,
   DELEGATED_EXECUTOR_ADDRESS,
+  BATCH_EXECUTOR_ADDRESS,
 };
 
 // Verify signer has valid address
