@@ -382,15 +382,41 @@ export class EIP7702Authorizer {
     this.authority = authority;
   }
 
-  async createAuthorization(nonce?: number): Promise<Authorization> {
+  /**
+   * @param accountNonce Current authority nonce (from getTransactionCount).
+   * @param opts.selfSponsored When true (default), auth.nonce = accountNonce + 1.
+   *   EIP-7702 processes the authorization list AFTER the sender's nonce is
+   *   incremented, so self-sponsored type-4 must sign auth with nonce+1.
+   *   Set selfSponsored=false only when a different account pays for the tx.
+   */
+  async createAuthorization(
+    accountNonce?: number,
+    opts?: { selfSponsored?: boolean }
+  ): Promise<Authorization> {
+    const addr = await this.authority.getAddress();
+    const current =
+      accountNonce ?? (await provider.getTransactionCount(addr, 'pending'));
+    const selfSponsored = opts?.selfSponsored !== false;
+    const authNonce = selfSponsored ? current + 1 : current;
     return signAuthorization(this.authority, this.delegatedExecutor, {
       chainId: this.chainId,
-      nonce,
+      nonce: authNonce,
     });
   }
 
-  async createClearAuthorization(nonce?: number): Promise<Authorization> {
-    return signClearAuthorization(this.authority, { chainId: this.chainId, nonce });
+  async createClearAuthorization(
+    accountNonce?: number,
+    opts?: { selfSponsored?: boolean }
+  ): Promise<Authorization> {
+    const addr = await this.authority.getAddress();
+    const current =
+      accountNonce ?? (await provider.getTransactionCount(addr, 'pending'));
+    const selfSponsored = opts?.selfSponsored !== false;
+    const authNonce = selfSponsored ? current + 1 : current;
+    return signClearAuthorization(this.authority, {
+      chainId: this.chainId,
+      nonce: authNonce,
+    });
   }
 
   /** Structured ABI encode of an auth tuple (debug / external tooling). */

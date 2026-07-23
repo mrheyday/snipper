@@ -33,9 +33,21 @@ library DeployRegistry {
     uint256 internal constant CHAIN_ID_ARBITRUM_SEPOLIA = 421614;
 
     address internal constant OWNER = 0x00000001386687D89e6A36aE01C5e5F75acF61Af;
+    /// @dev Production bot EOA (same as OWNER at current deploy).
+    address internal constant EOA = 0x00000001386687D89e6A36aE01C5e5F75acF61Af;
     address internal constant SNIPER_SEARCHER = 0xAC7465949D3178C9F13d629c6417b2a02D50DdC8;
     address internal constant FLASH_LOAN_RECEIVER = 0xdce71b4f28dcc5686B3B4e8790bD6051345A89b8;
     address internal constant DELEGATED_EXECUTOR = 0xc7a5B0873CB174A78017A66b541B24be64fBAde4;
+
+    /// @dev Preferred EIP-7702 multi-target designator: 0xef0100 || BEBE
+    function eoaDelegationBebeDesignator() internal pure returns (bytes memory) {
+        return abi.encodePacked(hex"ef0100", BEBE);
+    }
+
+    /// @dev Uni-only designator: 0xef0100 || DelegatedExecutor
+    function eoaDelegationDelegatedDesignator() internal pure returns (bytes memory) {
+        return abi.encodePacked(hex"ef0100", DELEGATED_EXECUTOR);
+    }
 
     /// @dev SniperSearcher(swapRouter, minAmountBitLength)
     function sniperConstructorArgs() internal pure returns (address swapRouter, uint256 minBits) {
