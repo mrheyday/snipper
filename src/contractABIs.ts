@@ -2,7 +2,6 @@
  * Smart Contract ABIs
  * Auto-generated from Foundry build artifacts
  * Generated on: 2026-07-23
- * Includes: SniperSearcher, FlashLoanReceiver, DelegatedExecutor, BEBE BasicEOABatchExecutor
  */
 
 export const SNIPER_SEARCHER_ABI = [
@@ -811,6 +810,27 @@ export const FLASH_LOAN_RECEIVER_ABI = [
   },
   {
     "type": "error",
+    "name": "InvalidSwapPath",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "PathMustEndInBorrowAsset",
+    "inputs": [
+      {
+        "name": "pathEnd",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "borrowAsset",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
+  },
+  {
+    "type": "error",
     "name": "Unauthorized",
     "inputs": []
   }
@@ -1145,13 +1165,39 @@ export const DELEGATED_EXECUTOR_ABI = [
   },
   {
     "type": "error",
+    "name": "CallbackDisabled",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "DeadlineExceeded",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidPath",
     "inputs": []
   },
   {
     "type": "error",
     "name": "SwapFailed",
     "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "TokenInMismatch",
+    "inputs": [
+      {
+        "name": "expected",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "pathTokenIn",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
   }
 ] as const;
 

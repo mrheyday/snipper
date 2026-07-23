@@ -1,4 +1,4 @@
-import { BigNumber, ethers } from 'ethers';
+import { ethers } from 'ethers';
 import { provider, signer } from './config';
 import { Logger } from './logger';
 import { validateAndChecksumAddress } from './validation';
@@ -21,14 +21,14 @@ const logger = new Logger('ERC4337');
 
 interface UserOperation {
   sender: string;
-  nonce: BigNumber;
+  nonce: bigint;
   initCode: string;
   callData: string;
-  callGasLimit: BigNumber;
-  verificationGasLimit: BigNumber;
-  preVerificationGas: BigNumber;
-  maxFeePerGas: BigNumber;
-  maxPriorityFeePerGas: BigNumber;
+  callGasLimit: bigint;
+  verificationGasLimit: bigint;
+  preVerificationGas: bigint;
+  maxFeePerGas: bigint;
+  maxPriorityFeePerGas: bigint;
   paymasterAndData: string;
   signature: string;
 }
@@ -38,7 +38,7 @@ interface SmartWalletExecutionResult {
   userOpHash?: string;
   txHash?: string;
   error?: string;
-  receipt?: ethers.ContractReceipt;
+  receipt?: ethers.TransactionReceipt;
 }
 
 /**
@@ -66,8 +66,8 @@ export class ERC4337SmartWallet {
   async createSwapUserOperation(params: {
     swapRouterAddress: string;
     tokenIn: string;
-    amountIn: BigNumber;
-    minAmountOut: BigNumber;
+    amountIn: bigint;
+    minAmountOut: bigint;
     path: Buffer;
     deadline: number;
   }): Promise<UserOperation> {
@@ -75,43 +75,44 @@ export class ERC4337SmartWallet {
 
     logger.info(`Creating UserOperation with nonce ${nonce}`);
 
-    // Encode swap call
-    const swapRouterInterface = new ethers.utils.Interface([
-      'function exactInput(bytes calldata path, address recipient, uint256 deadline, uint256 amountIn, uint256 amountOutMinimum) external payable returns (uint256)',
+    // SwapRouter02 exactInput((bytes,address,uint256,uint256)) — no deadline field
+    const swapRouterInterface = new ethers.Interface([
+      'function exactInput((bytes path, address recipient, uint256 amountIn, uint256 amountOutMinimum) params) payable returns (uint256 amountOut)',
     ]);
 
     const callData = swapRouterInterface.encodeFunctionData('exactInput', [
-      params.path,
-      this.walletAddress, // Receive output in wallet
-      params.deadline,
-      params.amountIn,
-      params.minAmountOut,
+      {
+        path: ethers.hexlify(params.path),
+        recipient: this.walletAddress,
+        amountIn: params.amountIn,
+        amountOutMinimum: params.minAmountOut,
+      },
     ]);
 
     // Wrap in wallet executeCall (sample structure)
-    const walletInterface = new ethers.utils.Interface([
+    const walletInterface = new ethers.Interface([
       'function executeCall(address target, uint256 value, bytes calldata data) external',
     ]);
 
     const walletCallData = walletInterface.encodeFunctionData('executeCall', [
       params.swapRouterAddress,
-      BigNumber.from(0),
+      BigInt(0),
       callData,
     ]);
 
-    const gasPrice = await provider.getGasPrice();
-    const baseFee = (await provider.getBlock('latest')).baseFeePerGas || gasPrice;
+    const gasPrice = (await provider.getFeeData()).gasPrice ?? 0n;
+    const baseFee = (await provider.getBlock('latest'))?.baseFeePerGas ?? gasPrice;
 
     return {
       sender: this.walletAddress,
-      nonce: BigNumber.from(nonce),
+      nonce: BigInt(nonce),
       initCode: '0x', // No factory call needed if wallet exists
       callData: walletCallData,
-      callGasLimit: BigNumber.from('200000'),
-      verificationGasLimit: BigNumber.from('100000'),
-      preVerificationGas: BigNumber.from('50000'),
-      maxFeePerGas: baseFee.mul(2), // 2x current base fee
-      maxPriorityFeePerGas: ethers.utils.parseUnits('1', 'gwei'),
+      callGasLimit: BigInt('200000'),
+      verificationGasLimit: BigInt('100000'),
+      preVerificationGas: BigInt('50000'),
+      maxFeePerGas: (baseFee * 2n), // 2x current base fee
+      maxPriorityFeePerGas: ethers.parseUnits('1', 'gwei'),
       paymasterAndData: '0x', // No paymaster for now
       signature: '0x', // Will be signed
     };
@@ -124,10 +125,10 @@ export class ERC4337SmartWallet {
   async createFlashLoanUserOperation(params: {
     lendingPoolAddress: string;
     borrowToken: string;
-    borrowAmount: BigNumber;
+    borrowAmount: bigint;
     swapRouterAddress: string;
     path: Buffer;
-    minAmountOut: BigNumber;
+    minAmountOut: bigint;
     deadline: number;
   }): Promise<UserOperation> {
     const nonce = await this.getWalletNonce();
@@ -135,12 +136,12 @@ export class ERC4337SmartWallet {
     logger.info(`Creating Flash Loan UserOperation with nonce ${nonce}`);
 
     // Prepare flash loan initiation call
-    const lendingPoolInterface = new ethers.utils.Interface([
+    const lendingPoolInterface = new ethers.Interface([
       'function flashLoanSimple(address receiver, address token, uint256 amount, bytes calldata params, uint16 referralCode) external',
     ]);
 
     // Encode swap as callback params
-    const swapData = ethers.utils.defaultAbiCoder.encode(
+    const swapData = ethers.AbiCoder.defaultAbiCoder().encode(
       ['address', 'bytes', 'uint256'],
       [params.swapRouterAddress, params.path, params.minAmountOut]
     );
@@ -154,29 +155,29 @@ export class ERC4337SmartWallet {
     ]);
 
     // Wrap in wallet executeCall
-    const walletInterface = new ethers.utils.Interface([
+    const walletInterface = new ethers.Interface([
       'function executeCall(address target, uint256 value, bytes calldata data) external',
     ]);
 
     const walletCallData = walletInterface.encodeFunctionData('executeCall', [
       params.lendingPoolAddress,
-      BigNumber.from(0),
+      BigInt(0),
       flashLoanCall,
     ]);
 
-    const gasPrice = await provider.getGasPrice();
-    const baseFee = (await provider.getBlock('latest')).baseFeePerGas || gasPrice;
+    const gasPrice = (await provider.getFeeData()).gasPrice ?? 0n;
+    const baseFee = (await provider.getBlock('latest'))?.baseFeePerGas ?? gasPrice;
 
     return {
       sender: this.walletAddress,
-      nonce: BigNumber.from(nonce),
+      nonce: BigInt(nonce),
       initCode: '0x',
       callData: walletCallData,
-      callGasLimit: BigNumber.from('400000'), // Flash loans need more gas
-      verificationGasLimit: BigNumber.from('150000'),
-      preVerificationGas: BigNumber.from('100000'),
-      maxFeePerGas: baseFee.mul(2),
-      maxPriorityFeePerGas: ethers.utils.parseUnits('1', 'gwei'),
+      callGasLimit: BigInt('400000'), // Flash loans need more gas
+      verificationGasLimit: BigInt('150000'),
+      preVerificationGas: BigInt('100000'),
+      maxFeePerGas: (baseFee * 2n),
+      maxPriorityFeePerGas: ethers.parseUnits('1', 'gwei'),
       paymasterAndData: '0x',
       signature: '0x',
     };
@@ -191,10 +192,10 @@ export class ERC4337SmartWallet {
 
     // Pack and hash per EIP-4337
     const encoded = this.encodeUserOperation(userOp);
-    const hash = ethers.utils.keccak256(encoded);
+    const hash = ethers.keccak256(encoded);
 
     // Sign hash
-    const sig = await signer.signMessage(ethers.utils.arrayify(hash));
+    const sig = await signer.signMessage(ethers.getBytes(hash));
 
     return {
       ...userOp,
@@ -215,7 +216,7 @@ export class ERC4337SmartWallet {
       logger.info(`UserOp Hash: ${userOpHash}`);
 
       // In production, send to bundler RPC endpoint:
-      // const bundlerProvider = new ethers.providers.JsonRpcProvider(bundlerEndpoint);
+      // const bundlerProvider = new ethers.JsonRpcProvider(bundlerEndpoint);
       // const userOpHash = await bundlerProvider.send('eth_sendUserOperation', [userOp, entryPoint]);
 
       // Simulate execution (replace with real bundler call)
@@ -252,7 +253,7 @@ export class ERC4337SmartWallet {
    * Encode UserOperation per EIP-4337 spec
    */
   private encodeUserOperation(userOp: UserOperation): string {
-    return ethers.utils.solidityPack(
+    return ethers.solidityPacked(
       [
         'address',
         'uint256',
@@ -268,14 +269,14 @@ export class ERC4337SmartWallet {
       [
         userOp.sender,
         userOp.nonce,
-        ethers.utils.keccak256(userOp.initCode),
-        ethers.utils.keccak256(userOp.callData),
+        ethers.keccak256(userOp.initCode),
+        ethers.keccak256(userOp.callData),
         userOp.callGasLimit,
         userOp.verificationGasLimit,
         userOp.preVerificationGas,
         userOp.maxFeePerGas,
         userOp.maxPriorityFeePerGas,
-        ethers.utils.keccak256(userOp.paymasterAndData),
+        ethers.keccak256(userOp.paymasterAndData),
       ]
     );
   }
@@ -285,10 +286,10 @@ export class ERC4337SmartWallet {
    */
   private calculateUserOpHash(userOp: UserOperation): string {
     const encoded = this.encodeUserOperation(userOp);
-    return ethers.utils.keccak256(
-      ethers.utils.solidityPack(
+    return ethers.keccak256(
+      ethers.solidityPacked(
         ['bytes32', 'address', 'uint256'],
-        [ethers.utils.keccak256(encoded), this.entryPoint, this.chainId]
+        [ethers.keccak256(encoded), this.entryPoint, this.chainId]
       )
     );
   }
@@ -354,7 +355,7 @@ export class ERC4337BundlerClient {
   /**
    * Get UserOperation receipt
    */
-  async getUserOperationReceipt(userOpHash: string): Promise<ethers.ContractReceipt | null> {
+  async getUserOperationReceipt(userOpHash: string): Promise<ethers.TransactionReceipt | null> {
     try {
       const response = await fetch(this.bundlerUrl, {
         method: 'POST',
@@ -368,7 +369,7 @@ export class ERC4337BundlerClient {
       });
 
       const data = (await response.json()) as {
-        result?: ethers.ContractReceipt;
+        result?: ethers.TransactionReceipt;
         error?: { message: string };
       };
 
@@ -389,14 +390,14 @@ export class ERC4337BundlerClient {
   private formatUserOp(userOp: UserOperation): Record<string, string> {
     return {
       sender: userOp.sender,
-      nonce: userOp.nonce.toHexString(),
+      nonce: ethers.toBeHex(userOp.nonce),
       initCode: userOp.initCode,
       callData: userOp.callData,
-      callGasLimit: userOp.callGasLimit.toHexString(),
-      verificationGasLimit: userOp.verificationGasLimit.toHexString(),
-      preVerificationGas: userOp.preVerificationGas.toHexString(),
-      maxFeePerGas: userOp.maxFeePerGas.toHexString(),
-      maxPriorityFeePerGas: userOp.maxPriorityFeePerGas.toHexString(),
+      callGasLimit: ethers.toBeHex(userOp.callGasLimit),
+      verificationGasLimit: ethers.toBeHex(userOp.verificationGasLimit),
+      preVerificationGas: ethers.toBeHex(userOp.preVerificationGas),
+      maxFeePerGas: ethers.toBeHex(userOp.maxFeePerGas),
+      maxPriorityFeePerGas: ethers.toBeHex(userOp.maxPriorityFeePerGas),
       paymasterAndData: userOp.paymasterAndData,
       signature: userOp.signature,
     };

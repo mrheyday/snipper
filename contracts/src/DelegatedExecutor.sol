@@ -5,20 +5,28 @@ import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 import {Multicallable} from "solady/utils/Multicallable.sol";
 import {MegaMEVOptimizationLib} from "./MegaMEVOptimizationLib.sol";
 
-/// @dev Matches the actual deployed SwapRouter02 ABI, which does not accept a
-///      per-call `deadline` field on exactInput. Deadlines are enforced at the
-///      contract level instead (see DeadlineExceeded checks below).
-interface ISwapRouter {
-    function exactInput(bytes calldata path, address recipient, uint256 amountIn, uint256 amountOutMinimum)
-        external
-        payable
-        returns (uint256);
+/// @dev Uniswap V3 SwapRouter02 exactInput — struct form, NO per-call deadline.
+///      Selector: exactInput((bytes,address,uint256,uint256)) = 0xb858183f
+///      Deadlines are enforced in this contract (see DeadlineExceeded checks).
+interface IUniswapV3Router02 {
+    struct ExactInputParams {
+        bytes path;
+        address recipient;
+        uint256 amountIn;
+        uint256 amountOutMinimum;
+    }
+
+    function exactInput(ExactInputParams calldata params) external payable returns (uint256 amountOut);
 }
 
 error SwapFailed();
 error TransferFailed();
 error DeadlineExceeded();
 error AmountTooSmall(uint256 amountIn, uint256 minBitLength);
+error InvalidPath();
+error TokenInMismatch(address expected, address pathTokenIn);
+error CallbackDisabled();
+error ZeroAddress();
 
 /// @title DelegatedExecutor
 /// @notice Contract for EIP-7702 EOA delegation
@@ -121,23 +129,28 @@ contract DelegatedExecutor is Multicallable {
     {
         if (block.timestamp > deadline) revert DeadlineExceeded();
         _checkMinAmount(amountIn);
+        _validatePath(tokenIn, path);
 
         // Under EIP-7702, tokens already sit on the EOA (address(this)); externally
         // they are pulled from msg.sender into this contract first.
         _pullIn(tokenIn, amountIn);
 
-        // Approve router
         SafeTransferLib.safeApproveWithRetry(tokenIn, SWAP_ROUTER, amountIn);
 
-        // Execute swap — recipient is this account (EOA under 7702).
-        try ISwapRouter(SWAP_ROUTER).exactInput(path, _recipient(), amountIn, minAmountOut) returns (uint256 out) {
+        // SwapRouter02 struct exactInput (0xb858183f) — recipient is this account under 7702.
+        try IUniswapV3Router02(SWAP_ROUTER).exactInput(
+            IUniswapV3Router02.ExactInputParams({
+                path: path,
+                recipient: _recipient(),
+                amountIn: amountIn,
+                amountOutMinimum: minAmountOut
+            })
+        ) returns (uint256 out) {
             amountOut = out;
         } catch {
             revert SwapFailed();
         }
 
-        // Revoke any unconsumed allowance so the router never holds a standing approval
-        // from this account between transactions.
         SafeTransferLib.safeApprove(tokenIn, SWAP_ROUTER, 0);
 
         emit Swap(tokenIn, _getTokenOut(path), amountIn, amountOut);
@@ -156,24 +169,27 @@ contract DelegatedExecutor is Multicallable {
     ) external nonReentrant onlyAllowedEOA returns (uint256 amountOut) {
         if (block.timestamp > deadline) revert DeadlineExceeded();
         _checkMinAmount(amountIn);
+        _validatePath(tokenIn, path);
+        // Callback path disabled until an explicit selector allowlist is productized.
+        if (callbackData.length > 0) revert CallbackDisabled();
 
         _pullIn(tokenIn, amountIn);
         SafeTransferLib.safeApproveWithRetry(tokenIn, SWAP_ROUTER, amountIn);
 
-        try ISwapRouter(SWAP_ROUTER).exactInput(path, _recipient(), amountIn, minAmountOut) returns (uint256 out) {
+        try IUniswapV3Router02(SWAP_ROUTER).exactInput(
+            IUniswapV3Router02.ExactInputParams({
+                path: path,
+                recipient: _recipient(),
+                amountIn: amountIn,
+                amountOutMinimum: minAmountOut
+            })
+        ) returns (uint256 out) {
             amountOut = out;
         } catch {
             revert SwapFailed();
         }
 
-        // Revoke any unconsumed allowance so the router never holds a standing approval
-        // from this account between transactions.
         SafeTransferLib.safeApprove(tokenIn, SWAP_ROUTER, 0);
-
-        // Handle callback for additional operations
-        if (callbackData.length > 0) {
-            _executeCallback(callbackData);
-        }
 
         // Output already on this account under 7702; when called externally, forward it.
         address tokenOut = _getTokenOut(path);
@@ -206,23 +222,24 @@ contract DelegatedExecutor is Multicallable {
         for (uint256 i = 0; i < swaps.length; ++i) {
             SwapRequest calldata swap = swaps[i];
             _checkMinAmount(swap.amountIn);
+            _validatePath(swap.tokenIn, swap.path);
 
-            // Pull input unless we already are the EOA (EIP-7702 self-execution).
             _pullIn(swap.tokenIn, swap.amountIn);
-
-            // Approve and execute
             SafeTransferLib.safeApproveWithRetry(swap.tokenIn, SWAP_ROUTER, swap.amountIn);
 
-            try ISwapRouter(SWAP_ROUTER).exactInput(
-                swap.path, _recipient(), swap.amountIn, swap.minAmountOut
+            try IUniswapV3Router02(SWAP_ROUTER).exactInput(
+                IUniswapV3Router02.ExactInputParams({
+                    path: swap.path,
+                    recipient: _recipient(),
+                    amountIn: swap.amountIn,
+                    amountOutMinimum: swap.minAmountOut
+                })
             ) returns (uint256 out) {
                 amountsOut[i] = out;
             } catch {
                 revert SwapFailed();
             }
 
-            // Revoke any unconsumed allowance so the router never holds a standing approval
-            // from this account between transactions.
             SafeTransferLib.safeApprove(swap.tokenIn, SWAP_ROUTER, 0);
 
             emit Swap(swap.tokenIn, _getTokenOut(swap.path), swap.amountIn, amountsOut[i]);
@@ -232,27 +249,17 @@ contract DelegatedExecutor is Multicallable {
     /// @notice Receive tokens (for fallback swaps)
     receive() external payable {}
 
-    /// @dev Internal: execute callback for custom logic
-    /// @dev Callbacks are restricted to prevent arbitrary execution
-    /// @dev Only allows callbacks with whitelisted function selectors
-    function _executeCallback(bytes calldata callbackData) internal {
-        require(callbackData.length >= 4, "Invalid callback");
-
-        // Extract function selector (first 4 bytes)
-        bytes4 selector = bytes4(callbackData[:4]);
-
-        // Whitelist allowed callbacks (can be extended as needed)
-        // For now, only allow internal execution patterns
-        // In production, maintain explicit selector whitelist
-        require(selector != bytes4(0), "Invalid callback selector");
-
-        (bool success,) = address(this).call(callbackData);
-        require(success, "Callback failed");
+    /// @dev Uni V3 path = tokenIn(20) | fee(3) | ... | tokenOut(20); min one hop = 43 bytes.
+    function _validatePath(address tokenIn, bytes calldata path) internal pure {
+        if (path.length < 43) revert InvalidPath();
+        if ((path.length - 20) % 23 != 0) revert InvalidPath();
+        address pathTokenIn = address(bytes20(path[0:20]));
+        if (pathTokenIn != tokenIn) revert TokenInMismatch(tokenIn, pathTokenIn);
     }
 
     /// @dev Internal: extract output token from Uniswap V3 path
     function _getTokenOut(bytes calldata path) internal pure returns (address) {
-        require(path.length >= 20, "Invalid path");
+        if (path.length < 20) revert InvalidPath();
         return address(bytes20(path[path.length - 20:]));
     }
 

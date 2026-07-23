@@ -1,4 +1,4 @@
-import { BigNumber, Signer, Contract } from 'ethers';
+import { Signer, Contract } from 'ethers';
 
 const PERMIT2_ABI = [
   'function approve(address token, uint160 amount, uint48 expiration) external',
@@ -9,7 +9,7 @@ const PERMIT2_ABI = [
 
 interface PermitDetails {
   token: string;
-  amount: BigNumber;
+  amount: bigint;
   expiration: number;
   nonce: number;
 }
@@ -88,7 +88,7 @@ export class Permit2Handler {
   async createPermit(
     ownerAddress: string,
     tokenAddress: string,
-    amount: BigNumber,
+    amount: bigint,
     spender: string,
     expiration: number,
     provider: unknown
@@ -114,7 +114,7 @@ export class Permit2Handler {
   /**
    * Approve token via Permit2 (if needed)
    */
-  async approveToken(tokenAddress: string, amount: BigNumber, expiration: number): Promise<void> {
+  async approveToken(tokenAddress: string, amount: bigint, expiration: number): Promise<void> {
     const permit2Contract = new Contract(this.permit2Address, PERMIT2_ABI, this.signer);
 
     const tx = await permit2Contract.approve(tokenAddress, amount, expiration);

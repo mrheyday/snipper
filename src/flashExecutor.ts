@@ -1,5 +1,4 @@
-import { BigNumber, ethers, Signer, Wallet, providers } from 'ethers';
-import { UiPoolDataProvider } from '@aave/contract-helpers';
+import { ethers, Signer, Wallet } from 'ethers';
 import {
   signer,
   provider,
@@ -9,11 +8,12 @@ import {
 import { FLASH_LOAN_RECEIVER_ABI } from './contractABIs';
 import { BatchEOAExecutor, BatchCall } from './eip7702';
 import { Logger } from './logger';
+import { getReserveEligibility } from './aaveReserves';
 
 const logger = new Logger('FlashLoanExecutor');
 
 /** Encoded initiateFlashLoan(address,uint256,bytes,uint256) for type-4 batches. */
-const INITIATE_FLASH_IFACE = new ethers.utils.Interface([
+const INITIATE_FLASH_IFACE = new ethers.Interface([
   'function initiateFlashLoan(address token, uint256 amount, bytes swapPath, uint256 minAmountOut)',
 ]);
 
@@ -27,9 +27,9 @@ const ARBITRUM_CHAIN_ID = 42161;
 
 interface FlashLoanParams {
   token: string;
-  amount: BigNumber;
+  amount: bigint;
   swapPath: Buffer | string;
-  minAmountOut: BigNumber;
+  minAmountOut: bigint;
   /**
    * When true (and BATCH_EXECUTOR_ADDRESS is configured), initiate via EIP-7702
    * type-4: EOA authorizes BasicEOABatchExecutor then CALLs FlashLoanReceiver.
@@ -41,9 +41,9 @@ interface FlashLoanParams {
 interface FlashLoanResult {
   success: boolean;
   txHash?: string;
-  profit?: BigNumber;
+  profit?: bigint;
   error?: string;
-  gasUsed?: BigNumber;
+  gasUsed?: bigint;
   revertReason?: string;
   /** Set when the initiation tx was EIP-7702 type-4. */
   type4?: boolean;
@@ -71,7 +71,6 @@ interface FlashLoanResult {
 export class FlashLoanExecutor {
   private receiver: ethers.Contract;
   private executorSigner: Signer;
-  private poolDataProvider: UiPoolDataProvider;
   private batchExecutor: BatchEOAExecutor | null;
 
   constructor(receiverAddress: string, executorSigner?: Signer) {
@@ -81,12 +80,7 @@ export class FlashLoanExecutor {
       FLASH_LOAN_RECEIVER_ABI,
       this.executorSigner
     );
-    this.poolDataProvider = new UiPoolDataProvider({
-      uiPoolDataProviderAddress: UI_POOL_DATA_PROVIDER_ADDRESS,
-      provider,
-      chainId: ARBITRUM_CHAIN_ID,
-    });
-    // Optional EIP-7702 type-4 path (requires BATCH_EXECUTOR_ADDRESS + Wallet signer).
+        // Optional EIP-7702 type-4 path (requires BATCH_EXECUTOR_ADDRESS + Wallet signer).
     if (BATCH_EXECUTOR_ADDRESS && this.executorSigner instanceof Wallet) {
       this.batchExecutor = new BatchEOAExecutor(
         BATCH_EXECUTOR_ADDRESS,
@@ -112,37 +106,8 @@ export class FlashLoanExecutor {
   private async checkReserveEligibility(
     token: string
   ): Promise<{ eligible: boolean; reason?: string }> {
-    try {
-      const { reservesData } = await this.poolDataProvider.getReservesHumanized({
-        lendingPoolAddressProvider: POOL_ADDRESSES_PROVIDER_ADDRESS,
-      });
-
-      const reserve = reservesData.find(
-        (r) => r.underlyingAsset.toLowerCase() === token.toLowerCase()
-      );
-
-      if (!reserve) {
-        return { eligible: false, reason: 'Not an Aave V3 Arbitrum reserve' };
-      }
-      if (!reserve.isActive) {
-        return { eligible: false, reason: 'Reserve is not active' };
-      }
-      if (reserve.isPaused) {
-        return { eligible: false, reason: 'Reserve is paused' };
-      }
-      if (reserve.isFrozen) {
-        return { eligible: false, reason: 'Reserve is frozen' };
-      }
-      if (!reserve.borrowingEnabled) {
-        return { eligible: false, reason: 'Borrowing disabled for this reserve' };
-      }
-
-      return { eligible: true };
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      logger.warn(`Reserve eligibility check failed, proceeding without it: ${reason}`);
-      return { eligible: true };
-    }
+    const elig = await getReserveEligibility(token);
+    return { eligible: elig.eligible, reason: elig.reason };
   }
 
   /**
@@ -154,9 +119,17 @@ export class FlashLoanExecutor {
     let txHash: string | undefined;
     try {
       logger.info('Initiating flash loan arbitrage');
-      logger.info(`Borrowing: ${ethers.utils.formatUnits(params.amount, 18)}`);
-      logger.info(`Min output: ${ethers.utils.formatUnits(params.minAmountOut, 18)}`);
+      logger.info(`Borrowing: ${ethers.formatUnits(params.amount, 18)}`);
+      logger.info(`Min output: ${ethers.formatUnits(params.minAmountOut, 18)}`);
       logger.info('Fee: Pool FLASHLOAN_PREMIUM_TOTAL bps (Arbitrum ~0.05%)');
+
+      // Path must end in the borrow asset (Aave repay currency). Off-chain gate —
+      // on-chain SniperSearcher only checks tokenIn == path start.
+      const pathCheck = this.assertRoundTripPath(params.token, params.swapPath);
+      if (!pathCheck.ok) {
+        logger.warn(`Flash path rejected: ${pathCheck.reason}`);
+        return { success: false, error: pathCheck.reason };
+      }
 
       // Check reserve eligibility before attempting anything on-chain — cheap,
       // free (view calls only), and gives a clear reason instead of a bare revert.
@@ -186,8 +159,8 @@ export class FlashLoanExecutor {
         params.swapPath,
         params.minAmountOut,
         {
-          gasLimit: gasEstimate.mul(115).div(100), // 15% buffer
-          maxFeePerGas: await provider.getGasPrice().then((p) => p.mul(120).div(100)), // 20% above current
+          gasLimit: gasEstimate * 115n / 100n, // 15% buffer
+          maxFeePerGas: await provider.getFeeData().then((fd) => ((fd.gasPrice ?? 0n) * 120n) / 100n), // 20% above current
         }
       );
 
@@ -226,8 +199,8 @@ export class FlashLoanExecutor {
 
       // Check profit
       const profit = await this.getProfitEstimate(params);
-      if (profit.gt(0)) {
-        logger.info(`Estimated profit: ${ethers.utils.formatUnits(profit, 18)}`);
+      if ((profit > 0)) {
+        logger.info(`Estimated profit: ${ethers.formatUnits(profit, 18)}`);
       }
 
       return {
@@ -271,10 +244,10 @@ export class FlashLoanExecutor {
     const successCount = results.filter((r) => r.success).length;
     const totalProfit = results
       .filter((r) => r.profit)
-      .reduce((sum, r) => sum.add(r.profit!), BigNumber.from(0));
+      .reduce((sum, r) => (sum + r.profit!), BigInt(0));
 
     logger.info(`Batch complete: ${successCount}/${loanBatches.length} successful`);
-    logger.info(`Total profit: ${ethers.utils.formatUnits(totalProfit, 18)}`);
+    logger.info(`Total profit: ${ethers.formatUnits(totalProfit, 18)}`);
 
     return results;
   }
@@ -285,13 +258,13 @@ export class FlashLoanExecutor {
    * @param to Recipient address
    * @param amount Amount to withdraw (0 = all)
    */
-  async withdraw(token: string, to: string, amount?: BigNumber): Promise<FlashLoanResult> {
+  async withdraw(token: string, to: string, amount?: bigint): Promise<FlashLoanResult> {
     let txHash: string | undefined;
     try {
       logger.info('Withdrawing from flash loan receiver');
 
       const withdrawAmount = amount || (await this.getBalance(token));
-      logger.info(`Token: ${token}, Amount: ${ethers.utils.formatUnits(withdrawAmount, 18)}`);
+      logger.info(`Token: ${token}, Amount: ${ethers.formatUnits(withdrawAmount, 18)}`);
 
       const tx = await this.receiver.withdraw(token, to, withdrawAmount);
       txHash = tx.hash;
@@ -327,15 +300,15 @@ export class FlashLoanExecutor {
   /**
    * Check balance in flash loan receiver
    */
-  async getBalance(token: string): Promise<BigNumber> {
+  async getBalance(token: string): Promise<bigint> {
     try {
       const balance = await this.receiver.getBalance(token);
-      return BigNumber.from(balance);
+      return BigInt(balance);
     } catch (error) {
       logger.warn(
         `Failed to get balance: ${error instanceof Error ? error.message : String(error)}`
       );
-      return BigNumber.from(0);
+      return BigInt(0);
     }
   }
 
@@ -343,7 +316,7 @@ export class FlashLoanExecutor {
    * Get receiver contract address
    */
   getReceiverAddress(): string {
-    return this.receiver.address;
+    return (this.receiver.target as string);
   }
 
   /**
@@ -352,14 +325,14 @@ export class FlashLoanExecutor {
    * fee uses Pool premium bps when readable, else 5 bps Arbitrum hint.
    * Path must round-trip to the borrow asset for repay to succeed.
    */
-  private async getProfitEstimate(params: FlashLoanParams): Promise<BigNumber> {
+  private async getProfitEstimate(params: FlashLoanParams): Promise<bigint> {
     const feeBps = await this.getFlashPremiumBps();
-    const fee = params.amount.mul(feeBps).div(10000);
-    const totalCost = params.amount.add(fee);
+    const fee = params.amount * BigInt(feeBps) / BigInt(10000);
+    const totalCost = (params.amount + fee);
 
-    return params.minAmountOut.sub(totalCost).gt(0)
-      ? params.minAmountOut.sub(totalCost)
-      : BigNumber.from(0);
+    return (params.minAmountOut - (totalCost) > 0)
+      ? (params.minAmountOut - totalCost)
+      : 0n;
   }
 
   /**
@@ -368,7 +341,7 @@ export class FlashLoanExecutor {
   private async getFlashPremiumBps(): Promise<number> {
     try {
       const bps = await this.receiver.flashLoanPremiumBps();
-      const n = BigNumber.from(bps).toNumber();
+      const n = Number(bps);
       if (n > 0 && n < 10_000) return n;
     } catch {
       // redeployed ABI / offline
@@ -399,7 +372,7 @@ export class FlashLoanExecutor {
     const pathHex =
       typeof params.swapPath === 'string'
         ? params.swapPath
-        : ethers.utils.hexlify(params.swapPath);
+        : ethers.hexlify(params.swapPath);
 
     const data = INITIATE_FLASH_IFACE.encodeFunctionData('initiateFlashLoan', [
       params.token,
@@ -410,18 +383,18 @@ export class FlashLoanExecutor {
 
     const calls: BatchCall[] = [
       {
-        to: this.receiver.address,
+        to: (this.receiver.target as string),
         data,
       },
     ];
 
     logger.info('Initiating flash loan via EIP-7702 type-4 batch');
-    logger.info(`  receiver: ${this.receiver.address}`);
+    logger.info(`  receiver: ${(this.receiver.target as string)}`);
     logger.info(`  batchExecutor: ${this.batchExecutor.getExecutorAddress()}`);
 
     const result = await this.batchExecutor.executeBatchCalls(calls, {
       // Flash + Aave callback + Uniswap swap is heavier than a plain approve/swap.
-      gasLimit: BigNumber.from(1_200_000),
+      gasLimit: BigInt(1_200_000),
     });
 
     if (!result.success) {
@@ -435,8 +408,8 @@ export class FlashLoanExecutor {
     }
 
     const profit = await this.getProfitEstimate(params);
-    if (profit.gt(0)) {
-      logger.info(`Estimated profit: ${ethers.utils.formatUnits(profit, 18)}`);
+    if ((profit > 0)) {
+      logger.info(`Estimated profit: ${ethers.formatUnits(profit, 18)}`);
     }
 
     return {
@@ -451,9 +424,9 @@ export class FlashLoanExecutor {
   /**
    * Estimate gas for flash loan
    */
-  private async estimateFlashLoanGas(params: FlashLoanParams): Promise<BigNumber> {
+  private async estimateFlashLoanGas(params: FlashLoanParams): Promise<bigint> {
     try {
-      const gasEstimate = await this.receiver.estimateGas.initiateFlashLoan(
+      const gasEstimate = await this.receiver.initiateFlashLoan.estimateGas(
         params.token,
         params.amount,
         params.swapPath,
@@ -477,7 +450,7 @@ export class FlashLoanExecutor {
     txHash: string,
     maxWaitMs: number,
     maxBlocks: number
-  ): Promise<providers.TransactionReceipt | null> {
+  ): Promise<ethers.TransactionReceipt | null> {
     const startTime = Date.now();
     const startBlock = await provider.getBlockNumber();
 
@@ -517,12 +490,12 @@ export class FlashLoanExecutor {
       };
 
       try {
-        const result = await provider.call(txRequest, tx.blockNumber);
+        const result = await provider.call({ ...txRequest, blockTag: tx.blockNumber ?? undefined });
         if (result === '0x') return 'Unknown error';
 
         // Try to decode as Error(string)
         try {
-          const iface = new ethers.utils.Interface(['function Error(string) public pure']);
+          const iface = new ethers.Interface(['function Error(string) public pure']);
           const decoded = iface.decodeFunctionResult('Error', result);
           return decoded[0] as string;
         } catch {
@@ -534,6 +507,57 @@ export class FlashLoanExecutor {
     } catch (error) {
       return error instanceof Error ? error.message : 'Unknown error';
     }
+  }
+
+  /**
+   * Uni V3 path must start AND end with the Aave borrow asset (round-trip repay).
+   * Min length 66 bytes for two hops: t20|f3|t20|f3|t20.
+   */
+  private assertRoundTripPath(
+    borrowToken: string,
+    swapPath: Buffer | string
+  ): { ok: true } | { ok: false; reason: string } {
+    const hex =
+      typeof swapPath === 'string'
+        ? swapPath.startsWith('0x')
+          ? swapPath.slice(2)
+          : swapPath
+        : Buffer.isBuffer(swapPath)
+          ? swapPath.toString('hex')
+          : Buffer.from(swapPath as ArrayBuffer).toString('hex');
+
+    if (hex.length < 132) {
+      // 66 bytes * 2 hex chars — single hop cannot repay flash in same asset
+      return {
+        ok: false,
+        reason:
+          `Flash path too short (${hex.length / 2} bytes). ` +
+          'Need ≥2 hops ending in borrow asset (min 66 bytes).',
+      };
+    }
+    if (((hex.length / 2 - 20) % 23) !== 0) {
+      return { ok: false, reason: 'Flash path length is not a valid Uni V3 encoding' };
+    }
+
+    const start = ethers.getAddress('0x' + hex.slice(0, 40));
+    const end = ethers.getAddress('0x' + hex.slice(-40));
+    const borrow = ethers.getAddress(borrowToken);
+
+    if (start !== borrow) {
+      return {
+        ok: false,
+        reason: `Path tokenIn ${start} != borrow asset ${borrow}`,
+      };
+    }
+    if (end !== borrow) {
+      return {
+        ok: false,
+        reason:
+          `Path tokenOut ${end} != borrow asset ${borrow}. ` +
+          'Aave flashLoanSimple requires repay in the same asset (round-trip path).',
+      };
+    }
+    return { ok: true };
   }
 }
 
@@ -547,10 +571,10 @@ export class FlashLoanExecutor {
  * Pass live bps from Pool.FLASHLOAN_PREMIUM_TOTAL() when available.
  */
 export function calculateFlashLoanFee(
-  amount: BigNumber,
+  amount: bigint,
   premiumBps: number = 5
-): BigNumber {
-  return amount.mul(premiumBps).div(10000);
+): bigint {
+  return amount * BigInt(premiumBps) / BigInt(10000);
 }
 
 /**
@@ -558,14 +582,14 @@ export function calculateFlashLoanFee(
  * breakEvenPrice = (loanAmount + fee) / outputTokens
  */
 export function calculateBreakEvenPrice(
-  loanAmount: BigNumber,
-  expectedOutput: BigNumber,
+  loanAmount: bigint,
+  expectedOutput: bigint,
   outputDecimals: number = 18
 ): number {
   const fee = calculateFlashLoanFee(loanAmount);
-  const totalCost = loanAmount.add(fee);
-  const breakEven = totalCost.div(expectedOutput);
-  return parseFloat(ethers.utils.formatUnits(breakEven, outputDecimals));
+  const totalCost = (loanAmount + fee);
+  const breakEven = (totalCost / expectedOutput);
+  return parseFloat(ethers.formatUnits(breakEven, outputDecimals));
 }
 
 /**
@@ -573,14 +597,14 @@ export function calculateBreakEvenPrice(
  * maxBorrow = gasbudget / (gasPricePerBorrow + ~0.05% fee cost)
  */
 export function calculateMaxBorrowAmount(
-  gasBudgetWei: BigNumber,
-  gasPriceWei: BigNumber
-): BigNumber {
+  gasBudgetWei: bigint,
+  gasPriceWei: bigint
+): bigint {
   // Calculate max borrow given gas budget
-  const maxFromBudget = gasBudgetWei.div(gasPriceWei);
+  const maxFromBudget = (gasBudgetWei / gasPriceWei);
 
   // Fee impact at 5 bps: effective cost ≈ 1.0005 per token
-  return maxFromBudget.mul(10000).div(10005);
+  return maxFromBudget * 10000n / 10005n;
 }
 
 export default FlashLoanExecutor;

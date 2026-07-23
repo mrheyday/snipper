@@ -1,4 +1,4 @@
-import { BigNumber, ethers } from 'ethers';
+import { ethers } from 'ethers';
 import { provider } from './config';
 import { Logger } from './logger';
 
@@ -9,11 +9,11 @@ const logger = new Logger('GasOptimizer');
  */
 interface GasEstimate {
   mode: 'direct' | 'flashLoan' | 'eip7702' | 'erc4337';
-  gasLimit: BigNumber;
-  gasPrice: BigNumber;
-  maxFeePerGas: BigNumber;
-  maxPriorityFeePerGas: BigNumber;
-  estimatedCost: BigNumber;
+  gasLimit: bigint;
+  gasPrice: bigint;
+  maxFeePerGas: bigint;
+  maxPriorityFeePerGas: bigint;
+  estimatedCost: bigint;
   description: string;
 }
 
@@ -22,9 +22,9 @@ interface GasEstimate {
  */
 interface ProfitabilityAnalysis {
   mode: 'direct' | 'flashLoan' | 'eip7702' | 'erc4337';
-  grossProfit: BigNumber;
-  gasCost: BigNumber;
-  netProfit: BigNumber;
+  grossProfit: bigint;
+  gasCost: bigint;
+  netProfit: bigint;
   profitMargin: number; // percentage
   isRentable: boolean;
   recommendation: string;
@@ -35,14 +35,14 @@ interface ProfitabilityAnalysis {
  */
 export class GasOptimizer {
   private readonly chainId: number; // For EIP-7702 authorization hashing
-  private readonly flashLoanPremium: BigNumber; // bps hint; live Pool is source of truth
-  private readonly slippageBuffer: BigNumber; // additional slippage allowance
+  private readonly flashLoanPremium: bigint; // bps hint; live Pool is source of truth
+  private readonly slippageBuffer: bigint; // additional slippage allowance
 
   constructor(chainId: number = 42161) {
     this.chainId = chainId;
     // Arbitrum Aave V3 FLASHLOAN_PREMIUM_TOTAL = 5 bps (was 9 at V3 launch)
-    this.flashLoanPremium = BigNumber.from(5);
-    this.slippageBuffer = BigNumber.from(10); // 0.1% additional buffer
+    this.flashLoanPremium = BigInt(5);
+    this.slippageBuffer = BigInt(10); // 0.1% additional buffer
 
     logger.info(`Initialized GasOptimizer for chain ${this.chainId}`);
   }
@@ -51,29 +51,30 @@ export class GasOptimizer {
    * Get current gas prices and network conditions
    */
   async getCurrentGasPrices(): Promise<{
-    baseFee: BigNumber;
-    priorityFee: BigNumber;
-    maxFeePerGas: BigNumber;
-    gasPriceStandard: BigNumber;
+    baseFee: bigint;
+    priorityFee: bigint;
+    maxFeePerGas: bigint;
+    gasPriceStandard: bigint;
   }> {
-    const gasPrice = await provider.getGasPrice();
+    const feeData = await provider.getFeeData();
+    const gasPrice = feeData.gasPrice ?? 0n;
     const block = await provider.getBlock('latest');
-    const baseFee = block.baseFeePerGas || gasPrice;
+    const baseFee = block?.baseFeePerGas ?? gasPrice;
 
     // Priority fee: use 25th percentile for standard, 50th for priority
-    const priorityFee = ethers.utils.parseUnits('1', 'gwei'); // 1 gwei standard
-    const maxFeePerGas = baseFee.mul(3).add(priorityFee); // 3x base + priority
+    const priorityFee = ethers.parseUnits('1', 'gwei'); // 1 gwei standard
+    const maxFeePerGas = ((baseFee * 3n) + priorityFee); // 3x base + priority
 
     logger.info(`Current gas prices:`);
-    logger.info(`  Base Fee: ${ethers.utils.formatUnits(baseFee, 'gwei')} gwei`);
-    logger.info(`  Priority Fee: ${ethers.utils.formatUnits(priorityFee, 'gwei')} gwei`);
-    logger.info(`  Max Fee: ${ethers.utils.formatUnits(maxFeePerGas, 'gwei')} gwei`);
+    logger.info(`  Base Fee: ${ethers.formatUnits(baseFee, 'gwei')} gwei`);
+    logger.info(`  Priority Fee: ${ethers.formatUnits(priorityFee, 'gwei')} gwei`);
+    logger.info(`  Max Fee: ${ethers.formatUnits(maxFeePerGas, 'gwei')} gwei`);
 
     return {
       baseFee,
       priorityFee,
       maxFeePerGas,
-      gasPriceStandard: gasPrice,
+      gasPriceStandard: gasPrice ?? 0n,
     };
   }
 
@@ -87,8 +88,8 @@ export class GasOptimizer {
   async estimateDirectModeGas(): Promise<GasEstimate> {
     const { maxFeePerGas, baseFee, priorityFee } = await this.getCurrentGasPrices();
 
-    const gasLimit = BigNumber.from('145000'); // Typical swap
-    const estimatedCost = gasLimit.mul(maxFeePerGas);
+    const gasLimit = BigInt('145000'); // Typical swap
+    const estimatedCost = (gasLimit * maxFeePerGas);
 
     return {
       mode: 'direct',
@@ -110,15 +111,15 @@ export class GasOptimizer {
    * - Total: ~200,000 gas
    * Note: Plus flash loan premium (Aave FLASHLOAN_PREMIUM_TOTAL bps)
    */
-  async estimateFlashLoanModeGas(borrowAmount: BigNumber): Promise<GasEstimate> {
+  async estimateFlashLoanModeGas(borrowAmount: bigint): Promise<GasEstimate> {
     const { maxFeePerGas, baseFee, priorityFee } = await this.getCurrentGasPrices();
 
-    const gasLimit = BigNumber.from('200000'); // Typical flash loan
-    const estimatedCost = gasLimit.mul(maxFeePerGas);
+    const gasLimit = BigInt('200000'); // Typical flash loan
+    const estimatedCost = (gasLimit * maxFeePerGas);
 
     // Calculate flash loan premium (hint bps; on-chain uses callback premium)
     const premiumBps = this.flashLoanPremium;
-    const premiumAmount = borrowAmount.mul(premiumBps).div(10000);
+    const premiumAmount = borrowAmount * BigInt(premiumBps) / BigInt(10000);
 
     return {
       mode: 'flashLoan',
@@ -126,7 +127,7 @@ export class GasOptimizer {
       gasPrice: baseFee,
       maxFeePerGas,
       maxPriorityFeePerGas: priorityFee,
-      estimatedCost: estimatedCost.add(premiumAmount),
+      estimatedCost: (estimatedCost + premiumAmount),
       description: `Flash loan swap (${this.formatBN(premiumAmount)} premium)`,
     };
   }
@@ -142,8 +143,8 @@ export class GasOptimizer {
   async estimateEIP7702ModeGas(): Promise<GasEstimate> {
     const { maxFeePerGas, baseFee, priorityFee } = await this.getCurrentGasPrices();
 
-    const gasLimit = BigNumber.from('105000'); // EIP-7702 optimized
-    const estimatedCost = gasLimit.mul(maxFeePerGas);
+    const gasLimit = BigInt('105000'); // EIP-7702 optimized
+    const estimatedCost = (gasLimit * maxFeePerGas);
 
     return {
       mode: 'eip7702',
@@ -167,8 +168,8 @@ export class GasOptimizer {
   async estimateERC4337ModeGas(): Promise<GasEstimate> {
     const { maxFeePerGas, baseFee, priorityFee } = await this.getCurrentGasPrices();
 
-    const gasLimit = BigNumber.from('170000'); // ERC-4337 with bundler
-    const estimatedCost = gasLimit.mul(maxFeePerGas);
+    const gasLimit = BigInt('170000'); // ERC-4337 with bundler
+    const estimatedCost = (gasLimit * maxFeePerGas);
 
     return {
       mode: 'erc4337',
@@ -185,10 +186,10 @@ export class GasOptimizer {
    * Analyze profitability of execution modes
    */
   async analyzeProfitability(
-    swapAmount: BigNumber,
-    outputAmount: BigNumber,
-    inputPrice: BigNumber,
-    outputPrice: BigNumber
+    swapAmount: bigint,
+    outputAmount: bigint,
+    inputPrice: bigint,
+    outputPrice: bigint
   ): Promise<ProfitabilityAnalysis[]> {
     const estimates = await Promise.all([
       this.estimateDirectModeGas(),
@@ -198,17 +199,17 @@ export class GasOptimizer {
     ]);
 
     // Calculate gross profit
-    const inputValue = swapAmount.mul(inputPrice).div(BigNumber.from('1e18'));
-    const outputValue = outputAmount.mul(outputPrice).div(BigNumber.from('1e18'));
-    const grossProfit = outputValue.sub(inputValue);
+    const inputValue = swapAmount * BigInt(inputPrice) / BigInt(BigInt('1e18'));
+    const outputValue = outputAmount * BigInt(outputPrice) / BigInt(BigInt('1e18'));
+    const grossProfit = (outputValue - inputValue);
 
     return estimates.map((est) => {
-      const netProfit = grossProfit.sub(est.estimatedCost);
-      const profitMargin = outputValue.gt(0)
-        ? Number(netProfit.mul(10000).div(outputValue)) / 100
+      const netProfit = (grossProfit - est.estimatedCost);
+      const profitMargin = (outputValue > 0)
+        ? Number(netProfit * BigInt(10000) / BigInt(outputValue)) / 100
         : 0;
 
-      const isRentable = netProfit.gt(0) && profitMargin > 0.1; // >0.1% margin
+      const isRentable = (netProfit > 0) && profitMargin > 0.1; // >0.1% margin
 
       return {
         mode: est.mode,
@@ -249,30 +250,30 @@ export class GasOptimizer {
   /**
    * Optimize execution parameters based on gas prices
    */
-  async optimizeExecutionParams(baseSlippage: BigNumber): Promise<{
-    slippageTolerance: BigNumber;
+  async optimizeExecutionParams(baseSlippage: bigint): Promise<{
+    slippageTolerance: bigint;
     deadline: number;
-    priorityFee: BigNumber;
-    maxFeePerGas: BigNumber;
+    priorityFee: bigint;
+    maxFeePerGas: bigint;
   }> {
     const { baseFee, priorityFee, maxFeePerGas } = await this.getCurrentGasPrices();
 
     // Adjust slippage based on gas prices
     // High gas = tighter slippage to ensure profitability
-    const gasRatio = maxFeePerGas.mul(100).div(baseFee); // percentage of base fee
-    const slippageAdjustment = gasRatio.gt(300) // >3x base fee = high gas
+    const gasRatio = maxFeePerGas * BigInt(100) / BigInt(baseFee); // percentage of base fee
+    const slippageAdjustment = (gasRatio > 300) // >3x base fee = high gas
       ? this.slippageBuffer
-      : BigNumber.from(0);
+      : 0n;
 
-    const slippageTolerance = baseSlippage.add(slippageAdjustment);
+    const slippageTolerance = (baseSlippage + slippageAdjustment);
 
     // Deadline: 5 minutes from now
     const deadline = Math.floor(Date.now() / 1000) + 300;
 
     logger.info(`Optimized execution parameters:`);
-    logger.info(`  Slippage tolerance: ${ethers.utils.formatUnits(slippageTolerance, 0)} bps`);
+    logger.info(`  Slippage tolerance: ${ethers.formatUnits(slippageTolerance, 0)} bps`);
     logger.info(`  Deadline: ${new Date(deadline * 1000).toISOString()}`);
-    logger.info(`  Priority fee: ${ethers.utils.formatUnits(priorityFee, 'gwei')} gwei`);
+    logger.info(`  Priority fee: ${ethers.formatUnits(priorityFee, 'gwei')} gwei`);
 
     return {
       slippageTolerance,
@@ -286,21 +287,21 @@ export class GasOptimizer {
    * Estimate cost to reach profitability threshold
    */
   async estimateProfitabilityThreshold(
-    swapAmount: BigNumber,
-    inputPrice: BigNumber
+    swapAmount: bigint,
+    inputPrice: bigint
   ): Promise<{
-    requiredOutputPrice: BigNumber;
-    profitThreshold: BigNumber;
-    breakEvenPrice: BigNumber;
+    requiredOutputPrice: bigint;
+    profitThreshold: bigint;
+    breakEvenPrice: bigint;
   }> {
     const est = await this.estimateDirectModeGas();
     const gasCostInUsd = est.estimatedCost; // Approximation
 
     // Break-even: output value = input value + gas cost
-    const breakEvenPrice = inputPrice.add(gasCostInUsd.mul(1e18).div(swapAmount));
+    const breakEvenPrice = inputPrice + (gasCostInUsd * BigInt(1e18) / BigInt(swapAmount));
 
     // Profitability threshold: break-even + 0.5% margin
-    const profitThreshold = breakEvenPrice.mul(1005).div(1000);
+    const profitThreshold = breakEvenPrice * 1005n / 1000n;
 
     const requiredOutputPrice = profitThreshold;
 
@@ -319,30 +320,30 @@ export class GasOptimizer {
    * Get gas price alert thresholds
    */
   async getGasPriceAlerts(): Promise<{
-    normal: BigNumber;
-    high: BigNumber;
-    veryHigh: BigNumber;
+    normal: bigint;
+    high: bigint;
+    veryHigh: bigint;
     status: 'normal' | 'high' | 'veryHigh';
   }> {
     const { maxFeePerGas } = await this.getCurrentGasPrices();
 
     // Define thresholds
-    const normal = ethers.utils.parseUnits('50', 'gwei');
-    const high = ethers.utils.parseUnits('100', 'gwei');
-    const veryHigh = ethers.utils.parseUnits('200', 'gwei');
+    const normal = ethers.parseUnits('50', 'gwei');
+    const high = ethers.parseUnits('100', 'gwei');
+    const veryHigh = ethers.parseUnits('200', 'gwei');
 
     let status: 'normal' | 'high' | 'veryHigh' = 'normal';
-    if (maxFeePerGas.gte(veryHigh)) {
+    if ((maxFeePerGas >= veryHigh)) {
       status = 'veryHigh';
-    } else if (maxFeePerGas.gte(high)) {
+    } else if ((maxFeePerGas >= high)) {
       status = 'high';
     }
 
     logger.info(`Gas price status: ${status}`);
-    logger.info(`  Current max fee: ${ethers.utils.formatUnits(maxFeePerGas, 'gwei')} gwei`);
-    logger.info(`  Normal: ${ethers.utils.formatUnits(normal, 'gwei')} gwei`);
-    logger.info(`  High: ${ethers.utils.formatUnits(high, 'gwei')} gwei`);
-    logger.info(`  Very High: ${ethers.utils.formatUnits(veryHigh, 'gwei')} gwei`);
+    logger.info(`  Current max fee: ${ethers.formatUnits(maxFeePerGas, 'gwei')} gwei`);
+    logger.info(`  Normal: ${ethers.formatUnits(normal, 'gwei')} gwei`);
+    logger.info(`  High: ${ethers.formatUnits(high, 'gwei')} gwei`);
+    logger.info(`  Very High: ${ethers.formatUnits(veryHigh, 'gwei')} gwei`);
 
     return {
       normal,
@@ -353,10 +354,10 @@ export class GasOptimizer {
   }
 
   /**
-   * Format BigNumber for logging
+   * Format bigint for logging
    */
-  private formatBN(value: BigNumber): string {
-    return ethers.utils.formatUnits(value, 6).substring(0, 10);
+  private formatBN(value: bigint): string {
+    return ethers.formatUnits(value, 6).substring(0, 10);
   }
 }
 

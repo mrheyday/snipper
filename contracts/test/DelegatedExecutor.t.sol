@@ -13,6 +13,8 @@ contract DelegatedExecutorTest is Test {
 
     error DeadlineExceeded();
     error SwapFailed();
+    error InvalidPath();
+    error CallbackDisabled();
 
     event Swap(address indexed tokenIn, address indexed tokenOut, uint256 amountIn, uint256 amountOut);
 
@@ -28,7 +30,7 @@ contract DelegatedExecutorTest is Test {
 
     function test_ExecuteSwap_Success() public {
         uint256 amountIn = 100e18;
-        bytes memory path = abi.encodePacked(address(tokenA), address(tokenB));
+        bytes memory path = abi.encodePacked(address(tokenA), uint24(3000), address(tokenB));
         uint256 minOut = 100e6;
         uint256 deadline = block.timestamp + 300;
 
@@ -49,7 +51,7 @@ contract DelegatedExecutorTest is Test {
 
     function test_RevertWhen_DeadlineExceeded() public {
         uint256 amountIn = 100e18;
-        bytes memory path = abi.encodePacked(address(tokenA), address(tokenB));
+        bytes memory path = abi.encodePacked(address(tokenA), uint24(3000), address(tokenB));
         uint256 deadline = block.timestamp - 1; // Expired
 
         tokenA.mint(user, amountIn);
@@ -70,7 +72,7 @@ contract DelegatedExecutorTest is Test {
     function test_Fuzz_DeadlineValidation(uint256 futureTime) public {
         futureTime = bound(futureTime, block.timestamp + 1, block.timestamp + 10000);
         uint256 amountIn = 100e18;
-        bytes memory path = abi.encodePacked(address(tokenA), address(tokenB));
+        bytes memory path = abi.encodePacked(address(tokenA), uint24(3000), address(tokenB));
 
         tokenA.mint(user, amountIn);
 
@@ -85,6 +87,25 @@ contract DelegatedExecutorTest is Test {
         uint256 amountOut = executor.executeSwap(address(tokenA), amountIn, path, 0, futureTime);
         amountOut; // call is expected to revert; captured only to satisfy the return-value check
         vm.stopPrank();
+    }
+
+    function test_RevertWhen_InvalidPath() public {
+        executor.allowEOA(user);
+        bytes memory bad = abi.encodePacked(address(tokenA));
+        vm.prank(user);
+        vm.expectRevert(InvalidPath.selector);
+        executor.executeSwap(address(tokenA), 1e18, bad, 0, block.timestamp + 60);
+    }
+
+    function test_RevertWhen_CallbackDisabled() public {
+        executor.allowEOA(user);
+        bytes memory path = abi.encodePacked(address(tokenA), uint24(3000), address(tokenB));
+        bytes memory cb = hex"deadbeef";
+        vm.prank(user);
+        tokenA.approve(address(executor), 1e18);
+        vm.prank(user);
+        vm.expectRevert(CallbackDisabled.selector);
+        executor.executeSwapWithCallback(address(tokenA), 1e18, path, 0, block.timestamp + 60, cb);
     }
 
     function test_ReceiveETH() public {

@@ -1,4 +1,4 @@
-import { BigNumber, Contract, Signer, ethers } from 'ethers';
+import { Contract, Signer, ethers } from 'ethers';
 
 /**
  * Flash Loan Callback Handler
@@ -19,12 +19,12 @@ export class FlashLoanCallbackHandler {
   buildCallbackData(
     tokenIn: string,
     tokenOut: string,
-    amountIn: BigNumber,
-    minOutputAmount: BigNumber,
+    amountIn: bigint,
+    minOutputAmount: bigint,
     path: Buffer,
     swapRouterAddress: string
   ): string {
-    const abiCoder = ethers.utils.defaultAbiCoder;
+    const abiCoder = ethers.AbiCoder.defaultAbiCoder();
     return abiCoder.encode(
       ['address', 'address', 'uint256', 'uint256', 'bytes', 'address'],
       [tokenIn, tokenOut, amountIn, minOutputAmount, path, swapRouterAddress]
@@ -37,12 +37,12 @@ export class FlashLoanCallbackHandler {
   decodeCallbackData(callbackData: string): {
     tokenIn: string;
     tokenOut: string;
-    amountIn: BigNumber;
-    minOutputAmount: BigNumber;
+    amountIn: bigint;
+    minOutputAmount: bigint;
     path: Buffer;
     swapRouterAddress: string;
   } {
-    const abiCoder = ethers.utils.defaultAbiCoder;
+    const abiCoder = ethers.AbiCoder.defaultAbiCoder();
     const decoded = abiCoder.decode(
       ['address', 'address', 'uint256', 'uint256', 'bytes', 'address'],
       callbackData
@@ -64,8 +64,8 @@ export class FlashLoanCallbackHandler {
    * Pool.FLASHLOAN_PREMIUM_TOTAL() or FlashLoanReceiver.flashLoanPremiumBps()
    * for production sizing — this default is a hint only.
    */
-  calculateFlashLoanFee(amount: BigNumber, feeBasisPoints: number = 5): BigNumber {
-    return amount.mul(feeBasisPoints).div(10000);
+  calculateFlashLoanFee(amount: bigint, feeBasisPoints: number = 5): bigint {
+    return amount * BigInt(feeBasisPoints) / BigInt(10000);
   }
 
   /**
@@ -73,30 +73,30 @@ export class FlashLoanCallbackHandler {
    */
   async simulateFlashLoanExecution(
     _borrowToken: string,
-    borrowAmount: BigNumber,
+    borrowAmount: bigint,
     callbackData: string
   ): Promise<{
-    profit: BigNumber;
-    fee: BigNumber;
-    totalRepayment: BigNumber;
+    profit: bigint;
+    fee: bigint;
+    totalRepayment: bigint;
     isViable: boolean;
   }> {
     const decoded = this.decodeCallbackData(callbackData);
     const fee = this.calculateFlashLoanFee(borrowAmount);
-    const totalRepayment = borrowAmount.add(fee);
+    const totalRepayment = (borrowAmount + fee);
 
     // In production, this would simulate the actual swap
     // For now, we estimate based on minOutputAmount
     const estimatedOutput = decoded.minOutputAmount;
-    const profit = estimatedOutput.gt(totalRepayment)
-      ? estimatedOutput.sub(totalRepayment)
-      : BigNumber.from(0);
+    const profit = (estimatedOutput > totalRepayment)
+      ? (estimatedOutput - totalRepayment)
+      : 0n;
 
     return {
       profit,
       fee,
       totalRepayment,
-      isViable: profit.gt(0),
+      isViable: (profit > 0),
     };
   }
 
@@ -108,12 +108,12 @@ export class FlashLoanCallbackHandler {
     params: {
       tokenIn: string;
       tokenOut: string;
-      amountIn: BigNumber;
-      minOutputAmount: BigNumber;
+      amountIn: bigint;
+      minOutputAmount: bigint;
       path: Buffer;
       deadline: number;
     }
-  ): Promise<{ amountOut: BigNumber; txHash: string }> {
+  ): Promise<{ amountOut: bigint; txHash: string }> {
     try {
       // Build swap call
       const swapAbi = [
@@ -121,7 +121,7 @@ export class FlashLoanCallbackHandler {
       ];
 
       const router = new Contract(
-        (await swapRouter.getAddress?.()) || swapRouter.address,
+        await (swapRouter as any).getAddress?.() ?? String((swapRouter as any).target ?? (swapRouter as any).address),
         swapAbi,
         this.signer
       );
@@ -130,14 +130,14 @@ export class FlashLoanCallbackHandler {
       const tx = await router.swap(
         [params.path, params.tokenOut, params.amountIn, params.minOutputAmount, params.deadline],
         {
-          gasLimit: BigNumber.from(500000),
+          gasLimit: BigInt(500000),
         }
       );
 
       const receipt = await tx.wait();
       return {
         amountOut: params.minOutputAmount, // In production, extract from receipt
-        txHash: receipt.transactionHash,
+        txHash: receipt.hash,
       };
     } catch (error) {
       const err = new Error(
@@ -152,11 +152,11 @@ export class FlashLoanCallbackHandler {
    */
   async verifyRepaymentBalance(
     token: Contract,
-    requiredAmount: BigNumber,
+    requiredAmount: bigint,
     fromAddress: string
   ): Promise<boolean> {
     const balance = await token.balanceOf(fromAddress);
-    return balance.gte(requiredAmount);
+    return (balance >= requiredAmount);
   }
 
   /**
@@ -165,11 +165,11 @@ export class FlashLoanCallbackHandler {
   async approveTokenForRepayment(
     token: Contract,
     spender: string,
-    amount: BigNumber
+    amount: bigint
   ): Promise<string> {
     const tx = await token.approve(spender, amount);
     const receipt = await tx.wait();
-    return receipt.transactionHash;
+    return receipt.hash;
   }
 
   /**
@@ -179,12 +179,12 @@ export class FlashLoanCallbackHandler {
     aaveLendingPool: Contract,
     _swapRouter: Contract,
     borrowToken: string,
-    borrowAmount: BigNumber,
+    borrowAmount: bigint,
     callbackData: string
   ): Promise<{
     success: boolean;
-    profit?: BigNumber;
-    fee?: BigNumber;
+    profit?: bigint;
+    fee?: bigint;
     txHash?: string;
     error?: string;
   }> {
@@ -218,7 +218,7 @@ export class FlashLoanCallbackHandler {
         success: true,
         profit: simulation.profit,
         fee: simulation.fee,
-        txHash: receipt.transactionHash,
+        txHash: receipt.hash,
       };
     } catch (error) {
       return {
@@ -235,7 +235,7 @@ export class FlashLoanCallbackHandler {
   generateCallbackSignature(): string {
     // Aave V3 callback function signature
     const signature = 'executeOperation(address,uint256,uint256,address,bytes)';
-    return ethers.utils.keccak256(ethers.utils.toUtf8Bytes(signature));
+    return ethers.keccak256(ethers.toUtf8Bytes(signature));
   }
 
   /**
@@ -243,14 +243,14 @@ export class FlashLoanCallbackHandler {
    */
   generateApprovalData(
     token: string,
-    amount: BigNumber,
+    amount: bigint,
     spender: string
   ): {
     to: string;
     data: string;
   } {
     const erc20Abi = ['function approve(address spender, uint256 amount)'];
-    const iface = new ethers.utils.Interface(erc20Abi);
+    const iface = new ethers.Interface(erc20Abi);
     const data = iface.encodeFunctionData('approve', [spender, amount]);
 
     return {

@@ -1,16 +1,37 @@
-import { BigNumber, Signer, providers } from 'ethers';
-import { Pool, InterestRate, EthereumTransactionTypeExtended } from '@aave/contract-helpers';
-import { signer, provider } from './config';
+/**
+ * Aave V3 lending ops via ethers v6 (no @aave/contract-helpers).
+ */
+import {
+  Contract,
+  MaxUint256,
+  parseUnits,
+  type Provider,
+  type Signer,
+} from 'ethers';
+import { signer } from './config';
 import { Logger } from './logger';
+import { AAVE_POOL_ARBITRUM } from './aaveReserves';
 
 const logger = new Logger('AaveLending');
 
-// Aave V3 Pool on Arbitrum, same address used throughout this project and
-// verified on-chain (ADDRESSES_PROVIDER() cross-checked against the official
-// bgd-labs/aave-address-book entry for Arbitrum).
-const AAVE_POOL_ADDRESS = '0x794a61358D6845594F94dc1DB02A252b5b4814aD';
+export enum InterestRate {
+  None = 'None',
+  Stable = 'Stable',
+  Variable = 'Variable',
+}
 
-export { InterestRate };
+const POOL_ABI = [
+  'function supply(address asset,uint256 amount,address onBehalfOf,uint16 referralCode)',
+  'function withdraw(address asset,uint256 amount,address to) returns (uint256)',
+  'function borrow(address asset,uint256 amount,uint256 interestRateMode,uint16 referralCode,address onBehalfOf)',
+  'function repay(address asset,uint256 amount,uint256 interestRateMode,address onBehalfOf) returns (uint256)',
+];
+
+const ERC20_ABI = [
+  'function approve(address spender,uint256 amount) returns (bool)',
+  'function allowance(address owner,address spender) view returns (uint256)',
+  'function decimals() view returns (uint8)',
+];
 
 interface LendingResult {
   success: boolean;
@@ -18,138 +39,132 @@ interface LendingResult {
   error?: string;
 }
 
-/**
- * Aave V3 lending operations: supply, withdraw, borrow, repay.
- *
- * Unlike FlashLoanExecutor (borrow + repay atomically within one transaction,
- * no standing position), this maintains a real, ongoing Aave position: supplied
- * collateral and/or open debt that persists across transactions.
- */
+function rateMode(mode: InterestRate): number {
+  return mode === InterestRate.Stable ? 1 : 2;
+}
+
 export class AaveLending {
-  private pool: Pool;
+  private pool: Contract;
   private lendingSigner: Signer;
 
-  constructor(lendingSigner?: Signer, lendingProvider?: providers.Provider) {
+  constructor(lendingSigner?: Signer, _lendingProvider?: Provider) {
     this.lendingSigner = lendingSigner || signer;
-    this.pool = new Pool(lendingProvider || provider, {
-      POOL: AAVE_POOL_ADDRESS,
-    });
+    this.pool = new Contract(AAVE_POOL_ARBITRUM, POOL_ABI, this.lendingSigner);
   }
 
-  /**
-   * Supply (deposit) an asset as collateral. Earns supply APY; can be used
-   * as collateral for borrowing if the reserve allows it.
-   */
+  private async token(reserve: string): Promise<Contract> {
+    return new Contract(reserve, ERC20_ABI, this.lendingSigner);
+  }
+
+  private async amountRaw(reserve: string, amountHuman: string): Promise<bigint> {
+    if (amountHuman === 'max') return MaxUint256;
+    const t = await this.token(reserve);
+    const decimals = Number(await t.decimals());
+    return parseUnits(amountHuman, decimals);
+  }
+
+  private async ensureApprove(reserve: string, amount: bigint): Promise<string | undefined> {
+    const user = await this.lendingSigner.getAddress();
+    const t = await this.token(reserve);
+    const current: bigint = await t.allowance(user, AAVE_POOL_ARBITRUM);
+    if (current >= amount) return undefined;
+    if (current > 0n) {
+      const reset = await t.approve(AAVE_POOL_ARBITRUM, 0n);
+      await reset.wait(1);
+    }
+    const tx = await t.approve(AAVE_POOL_ARBITRUM, amount);
+    await tx.wait(1);
+    return tx.hash as string;
+  }
+
   async supply(reserveAddress: string, amountHuman: string): Promise<LendingResult> {
-    const user = await this.lendingSigner.getAddress();
-    logger.info(`Supplying ${amountHuman} of ${reserveAddress}`);
-
-    const txs = await this.pool.supply({
-      user,
-      reserve: reserveAddress,
-      amount: amountHuman,
-    });
-
-    return this._sendTxs(txs);
+    try {
+      const user = await this.lendingSigner.getAddress();
+      const amount = await this.amountRaw(reserveAddress, amountHuman);
+      logger.info('Supplying ' + amountHuman + ' of ' + reserveAddress);
+      const hashes: string[] = [];
+      const approveHash = await this.ensureApprove(reserveAddress, amount);
+      if (approveHash) hashes.push(approveHash);
+      const tx = await this.pool.supply(reserveAddress, amount, user, 0);
+      const receipt = await tx.wait(1);
+      if (!receipt || receipt.status === 0) {
+        return { success: false, txHashes: hashes, error: 'supply reverted' };
+      }
+      hashes.push(tx.hash);
+      return { success: true, txHashes: hashes };
+    } catch (e) {
+      return { success: false, error: e instanceof Error ? e.message : String(e) };
+    }
   }
 
-  /**
-   * Withdraw a previously supplied asset. Pass amount: 'max' to withdraw
-   * the full suppliable balance (Aave's UINT256_MAX convention).
-   */
   async withdraw(reserveAddress: string, amountHuman: string): Promise<LendingResult> {
-    const user = await this.lendingSigner.getAddress();
-    logger.info(`Withdrawing ${amountHuman} of ${reserveAddress}`);
-
-    const txs = await this.pool.withdraw({
-      user,
-      reserve: reserveAddress,
-      amount: amountHuman,
-    });
-
-    return this._sendTxs(txs);
+    try {
+      const user = await this.lendingSigner.getAddress();
+      const amount = await this.amountRaw(reserveAddress, amountHuman);
+      logger.info('Withdrawing ' + amountHuman + ' of ' + reserveAddress);
+      const tx = await this.pool.withdraw(reserveAddress, amount, user);
+      const receipt = await tx.wait(1);
+      if (!receipt || receipt.status === 0) {
+        return { success: false, error: 'withdraw reverted' };
+      }
+      return { success: true, txHashes: [tx.hash] };
+    } catch (e) {
+      return { success: false, error: e instanceof Error ? e.message : String(e) };
+    }
   }
 
-  /**
-   * Borrow an asset against supplied collateral. Requires the reserve to
-   * have borrowing enabled and the account to have sufficient collateral —
-   * check both via UiPoolDataProvider before calling this.
-   */
   async borrow(
     reserveAddress: string,
     amountHuman: string,
     interestRateMode: InterestRate = InterestRate.Variable
   ): Promise<LendingResult> {
-    const user = await this.lendingSigner.getAddress();
-    logger.info(`Borrowing ${amountHuman} of ${reserveAddress} (${interestRateMode} rate)`);
-
-    const txs = await this.pool.borrow({
-      user,
-      reserve: reserveAddress,
-      amount: amountHuman,
-      interestRateMode,
-    });
-
-    return this._sendTxs(txs);
+    try {
+      const user = await this.lendingSigner.getAddress();
+      const amount = await this.amountRaw(reserveAddress, amountHuman);
+      logger.info('Borrowing ' + amountHuman + ' of ' + reserveAddress);
+      const tx = await this.pool.borrow(
+        reserveAddress,
+        amount,
+        rateMode(interestRateMode),
+        0,
+        user
+      );
+      const receipt = await tx.wait(1);
+      if (!receipt || receipt.status === 0) {
+        return { success: false, error: 'borrow reverted' };
+      }
+      return { success: true, txHashes: [tx.hash] };
+    } catch (e) {
+      return { success: false, error: e instanceof Error ? e.message : String(e) };
+    }
   }
 
-  /**
-   * Repay borrowed debt. Pass amount: 'max' to repay the full debt balance.
-   */
   async repay(
     reserveAddress: string,
     amountHuman: string,
     interestRateMode: InterestRate = InterestRate.Variable
   ): Promise<LendingResult> {
-    const user = await this.lendingSigner.getAddress();
-    logger.info(`Repaying ${amountHuman} of ${reserveAddress} (${interestRateMode} rate)`);
-
-    const txs = await this.pool.repay({
-      user,
-      reserve: reserveAddress,
-      amount: amountHuman,
-      interestRateMode,
-    });
-
-    return this._sendTxs(txs);
-  }
-
-  /**
-   * Send a sequence of transactions (e.g. ERC20 approval followed by the
-   * main action) returned by an @aave/contract-helpers Pool method, waiting
-   * for each to confirm before sending the next.
-   */
-  private async _sendTxs(txs: EthereumTransactionTypeExtended[]): Promise<LendingResult> {
-    const txHashes: string[] = [];
     try {
-      for (const extendedTx of txs) {
-        const populatedTx = await extendedTx.tx();
-        const gasLimit = populatedTx.gasLimit
-          ? BigNumber.from(populatedTx.gasLimit.toString()).mul(115).div(100)
-          : undefined;
-
-        const sentTx = await this.lendingSigner.sendTransaction({
-          ...populatedTx,
-          gasLimit,
-        });
-        logger.info(`[${extendedTx.txType}] sent: ${sentTx.hash}`);
-
-        const receipt = await sentTx.wait(2);
-        if (receipt.status === 0) {
-          return {
-            success: false,
-            txHashes,
-            error: `Transaction reverted: ${sentTx.hash}`,
-          };
-        }
-        txHashes.push(sentTx.hash);
+      const user = await this.lendingSigner.getAddress();
+      const amount = await this.amountRaw(reserveAddress, amountHuman);
+      logger.info('Repaying ' + amountHuman + ' of ' + reserveAddress);
+      const hashes: string[] = [];
+      const approveHash = await this.ensureApprove(reserveAddress, amount);
+      if (approveHash) hashes.push(approveHash);
+      const tx = await this.pool.repay(
+        reserveAddress,
+        amount,
+        rateMode(interestRateMode),
+        user
+      );
+      const receipt = await tx.wait(1);
+      if (!receipt || receipt.status === 0) {
+        return { success: false, txHashes: hashes, error: 'repay reverted' };
       }
-
-      return { success: true, txHashes };
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      logger.error(`Lending operation failed: ${reason}`);
-      return { success: false, txHashes, error: reason };
+      hashes.push(tx.hash);
+      return { success: true, txHashes: hashes };
+    } catch (e) {
+      return { success: false, error: e instanceof Error ? e.message : String(e) };
     }
   }
 }

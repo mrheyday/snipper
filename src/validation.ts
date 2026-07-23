@@ -48,10 +48,10 @@ export function validatePrivateKey(key: string): void {
  * Validate and checksum Ethereum address (EIP-55)
  */
 export function validateAndChecksumAddress(address: string): string {
-  if (!ethers.utils.isAddress(address)) {
+  if (!ethers.isAddress(address)) {
     throw new Error(`Invalid Ethereum address: ${address}`);
   }
-  return ethers.utils.getAddress(address);
+  return ethers.getAddress(address);
 }
 
 /**
@@ -78,8 +78,8 @@ export function validateRPC(rpcUrl: string): void {
 export function validateSwapParams(
   tokenIn: string,
   tokenOut: string,
-  amountIn: ethers.BigNumber,
-  minAmountOut: ethers.BigNumber
+  amountIn: bigint,
+  minAmountOut: bigint
 ): void {
   // Validate tokens are different
   const checksummedIn = validateAndChecksumAddress(tokenIn);
@@ -90,16 +90,16 @@ export function validateSwapParams(
   }
 
   // Validate amounts are positive
-  if (!amountIn || amountIn.lte(0)) {
+  if (!amountIn || (amountIn <= 0)) {
     throw new Error('amountIn must be greater than 0');
   }
 
-  if (!minAmountOut || minAmountOut.lt(0)) {
+  if (!minAmountOut || (minAmountOut < 0)) {
     throw new Error('minAmountOut must be non-negative');
   }
 
   // Validate minAmountOut <= amountIn (sanity check)
-  if (minAmountOut.gt(amountIn.mul(2))) {
+  if (minAmountOut > amountIn * 2n) {
     throw new Error('minAmountOut suspiciously high compared to amountIn');
   }
 }

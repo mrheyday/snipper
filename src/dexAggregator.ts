@@ -1,9 +1,10 @@
-import { BigNumber, ethers } from 'ethers';
-import { Provider } from '@ethersproject/providers';
+import { ethers } from 'ethers';
+import type { Provider } from 'ethers';
 import { Logger } from './logger';
 import { UNISWAP_V3_QUOTER_ABI } from './abis';
 import { DEXType } from './interfaces/dex';
 import { QUOTER_ADDRESS } from './config';
+import { encodePath } from './uniswap';
 
 const logger = new Logger('DEXAggregator');
 
@@ -20,9 +21,9 @@ export interface BestRouteResult {
   tokenIn: string;
   tokenOut: string;
   feeTier: number;
-  amountIn: BigNumber;
-  amountOut: BigNumber;
-  executionPrice: BigNumber;
+  amountIn: bigint;
+  amountOut: bigint;
+  executionPrice: bigint;
 }
 
 export const ARBITRUM_DEX_PROTOCOLS: DEXProtocolConfig[] = [
@@ -78,7 +79,7 @@ export class DEXAggregator {
   async findBestRoute(
     tokenIn: string,
     tokenOut: string,
-    amountIn: BigNumber
+    amountIn: bigint
   ): Promise<BestRouteResult | null> {
     logger.info(
       `Aggregating DEX quotes for ${tokenIn} → ${tokenOut} (${amountIn.toString()} wei)...`
@@ -101,7 +102,7 @@ export class DEXAggregator {
     for (const res of results) {
       if (res.status === 'fulfilled' && res.value) {
         const route = res.value;
-        if (!bestRoute || route.amountOut.gt(bestRoute.amountOut)) {
+        if (!bestRoute || (route.amountOut > bestRoute.amountOut)) {
           bestRoute = route;
         }
       }
@@ -118,11 +119,55 @@ export class DEXAggregator {
     return bestRoute;
   }
 
-  private async getQuoteForProtocol(
+  /**
+   * Flash-loan sizing quote: borrow asset A, route A→mid→A on one DEX/fee tier.
+   * amountOut is back in `tokenIn` units so it is comparable to Aave repayment.
+   */
+  async findBestRoundTripRoute(
+    tokenIn: string,
+    midToken: string,
+    amountIn: bigint
+  ): Promise<BestRouteResult | null> {
+    logger.info(
+      `Aggregating round-trip quotes ${tokenIn} → ${midToken} → ${tokenIn} (${amountIn.toString()} wei)...`
+    );
+
+    const quotePromises: Promise<BestRouteResult | null>[] = [];
+    for (const protocol of this.protocols) {
+      for (const feeTier of protocol.supportedFeeTiers) {
+        quotePromises.push(
+          this.getRoundTripQuote(protocol, tokenIn, midToken, amountIn, feeTier)
+        );
+      }
+    }
+
+    const results = await Promise.allSettled(quotePromises);
+    let bestRoute: BestRouteResult | null = null;
+    for (const res of results) {
+      if (res.status === 'fulfilled' && res.value) {
+        const route = res.value;
+        if (!bestRoute || route.amountOut > bestRoute.amountOut) {
+          bestRoute = route;
+        }
+      }
+    }
+
+    if (bestRoute) {
+      logger.info(
+        `✓ Best round-trip: ${bestRoute.protocol.name} fee=${bestRoute.feeTier} ` +
+          `→ final ${bestRoute.amountOut.toString()} of borrow asset`
+      );
+    } else {
+      logger.warn('No positive round-trip DEX quote.');
+    }
+    return bestRoute;
+  }
+
+  private async getRoundTripQuote(
     protocol: DEXProtocolConfig,
     tokenIn: string,
-    tokenOut: string,
-    amountIn: BigNumber,
+    midToken: string,
+    amountIn: bigint,
     feeTier: number
   ): Promise<BestRouteResult | null> {
     try {
@@ -131,7 +176,47 @@ export class DEXAggregator {
         UNISWAP_V3_QUOTER_ABI,
         this.provider
       );
-      const [amountOut]: [BigNumber] = await quoter.callStatic.quoteExactInputSingle({
+      const pathBuf = encodePath(
+        [tokenIn, midToken, tokenIn],
+        [feeTier, feeTier]
+      );
+      const pathHex = ethers.hexlify(pathBuf);
+      const [amountOut]: [bigint] = await quoter.quoteExactInput.staticCall(
+        pathHex,
+        amountIn
+      );
+      if (amountOut && amountOut > 0n) {
+        return {
+          protocol,
+          tokenIn,
+          tokenOut: tokenIn, // round-trip ends in borrow asset
+          feeTier,
+          amountIn,
+          amountOut,
+          executionPrice:
+            (amountOut * BigInt(ethers.WeiPerEther)) / BigInt(amountIn),
+        };
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async getQuoteForProtocol(
+    protocol: DEXProtocolConfig,
+    tokenIn: string,
+    tokenOut: string,
+    amountIn: bigint,
+    feeTier: number
+  ): Promise<BestRouteResult | null> {
+    try {
+      const quoter = new ethers.Contract(
+        protocol.quoterAddress,
+        UNISWAP_V3_QUOTER_ABI,
+        this.provider
+      );
+      const [amountOut]: [bigint] = await quoter.quoteExactInputSingle.staticCall({
         tokenIn,
         tokenOut,
         amountIn,
@@ -139,7 +224,7 @@ export class DEXAggregator {
         sqrtPriceLimitX96: 0,
       });
 
-      if (amountOut && amountOut.gt(0)) {
+      if (amountOut && (amountOut > 0)) {
         return {
           protocol,
           tokenIn,
@@ -147,7 +232,7 @@ export class DEXAggregator {
           feeTier,
           amountIn,
           amountOut,
-          executionPrice: amountOut.mul(ethers.constants.WeiPerEther).div(amountIn),
+          executionPrice: amountOut * BigInt(ethers.WeiPerEther) / BigInt(amountIn),
         };
       }
       return null;

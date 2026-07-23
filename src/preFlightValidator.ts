@@ -1,4 +1,4 @@
-import { BigNumber, ethers } from 'ethers';
+import { ethers } from 'ethers';
 import { Logger } from './logger';
 import { getDelegationStatus, isDelegationDesignator, parseDelegate } from './eip7702';
 
@@ -28,9 +28,9 @@ export interface CheckResult {
  * Prevents failed transactions by validating all preconditions
  */
 export class PreFlightValidator {
-  private provider: ethers.providers.Provider;
+  private provider: ethers.Provider;
 
-  constructor(provider: ethers.providers.Provider) {
+  constructor(provider: ethers.Provider) {
     this.provider = provider;
   }
 
@@ -41,7 +41,7 @@ export class PreFlightValidator {
     delegatedExecutor: string;
     delegatedEOA: string;
     tokenIn: string;
-    amountIn: BigNumber;
+    amountIn: bigint;
     deadline: number;
   }): Promise<ValidationResult> {
     const checks: CheckResult[] = [];
@@ -52,7 +52,7 @@ export class PreFlightValidator {
     logger.info(`  EOA: ${params.delegatedEOA}`);
     logger.info(`  Executor: ${params.delegatedExecutor}`);
     logger.info(`  Token: ${params.tokenIn}`);
-    logger.info(`  Amount: ${ethers.utils.formatUnits(params.amountIn, 18)}`);
+    logger.info(`  Amount: ${ethers.formatUnits(params.amountIn, 18)}`);
 
     // 1. Check deadline
     checks.push(this._validateDeadline(params.deadline));
@@ -150,7 +150,7 @@ export class PreFlightValidator {
   private async _validateEOABalance(
     eoa: string,
     token: string,
-    amountNeeded: BigNumber
+    amountNeeded: bigint
   ): Promise<CheckResult> {
     try {
       const erc20 = new ethers.Contract(
@@ -160,14 +160,14 @@ export class PreFlightValidator {
       );
 
       const balance = await erc20.balanceOf(eoa);
-      const sufficient = balance.gte(amountNeeded);
+      const sufficient = (balance >= amountNeeded);
 
       return {
         name: 'EOA Balance',
         status: sufficient ? 'pass' : 'fail',
         message: sufficient
-          ? `Balance sufficient: ${ethers.utils.formatUnits(balance, 18)}`
-          : `Insufficient balance: have ${ethers.utils.formatUnits(balance, 18)}, need ${ethers.utils.formatUnits(amountNeeded, 18)}`,
+          ? `Balance sufficient: ${ethers.formatUnits(balance, 18)}`
+          : `Insufficient balance: have ${ethers.formatUnits(balance, 18)}, need ${ethers.formatUnits(amountNeeded, 18)}`,
         details: {
           balance: balance.toString(),
           needed: amountNeeded.toString(),
@@ -317,7 +317,7 @@ export class PreFlightValidator {
     eoa: string,
     executor: string,
     token: string,
-    amountNeeded: BigNumber
+    amountNeeded: bigint
   ): Promise<CheckResult> {
     try {
       const erc20 = new ethers.Contract(
@@ -327,13 +327,13 @@ export class PreFlightValidator {
       );
 
       const allowance = await erc20.allowance(eoa, executor);
-      const sufficient = allowance.gte(amountNeeded);
+      const sufficient = (allowance >= amountNeeded);
 
       return {
         name: 'Token Approval',
         status: 'pass',
         message: sufficient
-          ? `Legacy external-call approval present: ${ethers.utils.formatUnits(allowance, 18)}`
+          ? `Legacy external-call approval present: ${ethers.formatUnits(allowance, 18)}`
           : `No EOA→executor approval (OK for EIP-7702 self-execution; required only for external path)`,
         details: {
           allowance: allowance.toString(),
@@ -386,15 +386,15 @@ export class PreFlightValidator {
   private async _validateGasAvailability(eoa: string): Promise<CheckResult> {
     try {
       const balance = await this.provider.getBalance(eoa);
-      const minGas = ethers.utils.parseEther('0.001'); // ~0.001 ETH for gas
-      const sufficient = balance.gte(minGas);
+      const minGas = ethers.parseEther('0.001'); // ~0.001 ETH for gas
+      const sufficient = (balance >= minGas);
 
       return {
         name: 'Gas (ETH)',
         status: sufficient ? 'pass' : 'warn',
         message: sufficient
-          ? `EOA has ETH: ${ethers.utils.formatEther(balance)}`
-          : `Low ETH balance: ${ethers.utils.formatEther(balance)} (recommend > 0.001 ETH for gas)`,
+          ? `EOA has ETH: ${ethers.formatEther(balance)}`
+          : `Low ETH balance: ${ethers.formatEther(balance)} (recommend > 0.001 ETH for gas)`,
         details: {
           balance: balance.toString(),
           minRequired: minGas.toString(),

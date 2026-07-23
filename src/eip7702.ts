@@ -1,4 +1,4 @@
-import { BigNumber, ethers, Wallet } from 'ethers';
+import { ethers, Wallet } from 'ethers';
 import { provider, signer, CHAIN_ID } from './config';
 import { Logger } from './logger';
 import { validateAndChecksumAddress } from './validation';
@@ -13,7 +13,7 @@ const TX_TYPE_SET_CODE = 0x04;
 const DELEGATION_DESIGNATOR_PREFIX = '0xef0100';
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 
-const DELEGATED_EXECUTOR_IFACE = new ethers.utils.Interface([
+const DELEGATED_EXECUTOR_IFACE = new ethers.Interface([
   'function executeSwap(address tokenIn, uint256 amountIn, bytes calldata path, uint256 minAmountOut, uint256 deadline) external returns (uint256)',
   'function executeSwapWithCallback(address tokenIn, uint256 amountIn, bytes calldata path, uint256 minAmountOut, uint256 deadline, bytes calldata callbackData) external returns (uint256)',
   'function executeBatchSwaps(tuple(address tokenIn,uint256 amountIn,bytes path,uint256 minAmountOut)[] swaps, uint256 deadline) external returns (uint256[])',
@@ -22,7 +22,7 @@ const DELEGATED_EXECUTOR_IFACE = new ethers.utils.Interface([
 ]);
 
 /** ERC-7821 / BEBE multi-target batch executor (BasicEOABatchExecutor). */
-const BATCH_EXECUTOR_IFACE = new ethers.utils.Interface([
+const BATCH_EXECUTOR_IFACE = new ethers.Interface([
   'function execute(bytes32 mode, bytes executionData) payable',
   'function supportsExecutionMode(bytes32 mode) view returns (bool)',
   'function isValidSignature(bytes32 hash, bytes signature) view returns (bytes4)',
@@ -41,7 +41,7 @@ export const ERC7821_MODE_BATCH_NO_OPDATA =
 export interface BatchCall {
   /** Target contract. address(0) is rewritten to address(this) by ERC7821. */
   to: string;
-  value?: BigNumber;
+  value?: bigint;
   data: string;
 }
 
@@ -56,11 +56,11 @@ export interface Authorization {
 
 export interface DelegatedSwapParams {
   tokenIn: string;
-  amountIn: BigNumber;
+  amountIn: bigint;
   path: Buffer | string;
-  minAmountOut: BigNumber;
+  minAmountOut: bigint;
   deadline: number;
-  gasLimit?: BigNumber;
+  gasLimit?: bigint;
   /** If true, clear EOA delegation after the swap with a follow-up type-4. */
   clearAfter?: boolean;
 }
@@ -68,9 +68,9 @@ export interface DelegatedSwapParams {
 export interface DelegatedSwapResult {
   success: boolean;
   txHash?: string;
-  amountOut?: BigNumber;
+  amountOut?: bigint;
   error?: string;
-  gasUsed?: BigNumber;
+  gasUsed?: bigint;
   authorization?: Authorization;
   delegationCode?: string;
 }
@@ -115,16 +115,16 @@ function rlpEncodeBytes(input: Buffer): Buffer {
   return Buffer.concat([Buffer.from([0xb7 + lenBytes.length]), lenBytes, input]);
 }
 
-function rlpEncodeUint(value: ethers.BigNumberish): Buffer {
-  const bn = BigNumber.from(value);
-  if (bn.isZero()) return rlpEncodeBytes(Buffer.alloc(0));
-  let hex = bn.toHexString().slice(2);
+function rlpEncodeUint(value: bigint | string | number): Buffer {
+  const bn = BigInt(value);
+  if ((bn === 0n)) return rlpEncodeBytes(Buffer.alloc(0));
+  let hex = ethers.toBeHex(bn).slice(2);
   if (hex.length % 2) hex = '0' + hex;
   return rlpEncodeBytes(Buffer.from(hex, 'hex'));
 }
 
 function rlpEncodeAddress(addr: string): Buffer {
-  const clean = ethers.utils.getAddress(addr);
+  const clean = ethers.getAddress(addr);
   return rlpEncodeBytes(hexToBuf(clean));
 }
 
@@ -164,7 +164,7 @@ export function authorizationDigest(
     rlpEncodeUint(nonce),
   ]);
   const payload = Buffer.concat([Buffer.from([AUTH_MAGIC]), rlpAuth]);
-  return ethers.utils.keccak256(payload);
+  return ethers.keccak256(payload);
 }
 
 /**
@@ -184,7 +184,7 @@ export async function signAuthorization(
 
   const digest = authorizationDigest(chainId, delegateCs, nonce);
   // Raw ECDSA over the 32-byte digest — NOT signMessage.
-  const sig = authority._signingKey().signDigest(digest);
+  const sig = authority.signingKey.sign(digest);
 
   return {
     chainId,
@@ -216,7 +216,7 @@ export function isDelegationDesignator(code: string): boolean {
 
 export function parseDelegate(code: string): string | null {
   if (!isDelegationDesignator(code)) return null;
-  return ethers.utils.getAddress('0x' + code.slice(8));
+  return ethers.getAddress('0x' + code.slice(8));
 }
 
 export async function getDelegationStatus(eoa: string): Promise<DelegationStatus> {
@@ -243,11 +243,11 @@ export async function getDelegationStatus(eoa: string): Promise<DelegationStatus
 export interface Type4TxFields {
   chainId: number;
   nonce: number;
-  maxPriorityFeePerGas: BigNumber;
-  maxFeePerGas: BigNumber;
-  gasLimit: BigNumber;
+  maxPriorityFeePerGas: bigint;
+  maxFeePerGas: bigint;
+  gasLimit: bigint;
   to: string | null;
-  value: BigNumber;
+  value: bigint;
   data: string;
   accessList?: Array<{ address: string; storageKeys: string[] }>;
   authorizationList: Authorization[];
@@ -311,7 +311,7 @@ function encodeType4Payload(
 }
 
 export function hashType4Transaction(fields: Type4TxFields): string {
-  return ethers.utils.keccak256(encodeType4Payload(fields));
+  return ethers.keccak256(encodeType4Payload(fields));
 }
 
 export function serializeSignedType4(
@@ -341,7 +341,7 @@ export async function sendType4Transaction(
     maxFeePerGas: fields.maxFeePerGas,
     gasLimit: fields.gasLimit,
     to: fields.to,
-    value: fields.value ?? BigNumber.from(0),
+    value: fields.value ?? BigInt(0),
     data: fields.data ?? '0x',
     accessList: fields.accessList ?? [],
     authorizationList: fields.authorizationList,
@@ -352,7 +352,7 @@ export async function sendType4Transaction(
   }
 
   const digest = hashType4Transaction(full);
-  const sig = sender._signingKey().signDigest(digest);
+  const sig = sender.signingKey.sign(digest);
   const yParity = sig.v === 27 ? 0 : 1;
   const raw = serializeSignedType4(full, { yParity, r: sig.r, s: sig.s });
 
@@ -394,7 +394,7 @@ export class EIP7702Authorizer {
 
   /** Structured ABI encode of an auth tuple (debug / external tooling). */
   encodeAuthorization(auth: Authorization): string {
-    return ethers.utils.defaultAbiCoder.encode(
+    return ethers.AbiCoder.defaultAbiCoder().encode(
       ['uint256', 'address', 'uint256', 'uint8', 'bytes32', 'bytes32'],
       [auth.chainId, auth.address, auth.nonce, auth.yParity, auth.r, auth.s]
     );
@@ -430,11 +430,11 @@ export class EIP7702Executor {
     return getDelegationStatus(await this.authority.getAddress());
   }
 
-  private async feeHints(): Promise<{ tip: BigNumber; maxFee: BigNumber }> {
+  private async feeHints(): Promise<{ tip: bigint; maxFee: bigint }> {
     const fee = await provider.getFeeData();
-    const tip = fee.maxPriorityFeePerGas ?? ethers.utils.parseUnits('0.01', 'gwei');
-    const maxFee = fee.maxFeePerGas ?? (await provider.getGasPrice()).mul(2);
-    return { tip, maxFee: maxFee.gt(tip) ? maxFee : tip.mul(2) };
+    const tip = fee.maxPriorityFeePerGas ?? ethers.parseUnits('0.01', 'gwei');
+    const maxFee = fee.maxFeePerGas ?? (((await provider.getFeeData()).gasPrice ?? 0n) * 2n);
+    return { tip, maxFee: (maxFee > tip) ? maxFee : (tip * 2n) };
   }
 
   private pathToHex(path: Buffer | string): string {
@@ -463,7 +463,7 @@ export class EIP7702Executor {
       ]);
 
       const { tip, maxFee } = await this.feeHints();
-      const gasLimit = params.gasLimit ?? BigNumber.from(450_000);
+      const gasLimit = params.gasLimit ?? BigInt(450_000);
       const status = await getDelegationStatus(eoa);
 
       // Always include a fresh auth so the tx is a true type-4 SetCode tx.
@@ -478,7 +478,7 @@ export class EIP7702Executor {
         maxFeePerGas: maxFee,
         gasLimit,
         to: eoa, // execute against the delegated EOA itself
-        value: BigNumber.from(0),
+        value: 0n,
         data,
         authorizationList: [auth],
       });
@@ -552,9 +552,9 @@ export class EIP7702Executor {
         chainId: this.chainId,
         maxPriorityFeePerGas: tip,
         maxFeePerGas: maxFee,
-        gasLimit: BigNumber.from(200_000 + swaps.length * 180_000),
+        gasLimit: BigInt(200_000 + swaps.length * 180_000),
         to: eoa,
-        value: BigNumber.from(0),
+        value: 0n,
         data,
         authorizationList: [auth],
       });
@@ -595,9 +595,9 @@ export class EIP7702Executor {
         chainId: this.chainId,
         maxPriorityFeePerGas: tip,
         maxFeePerGas: maxFee,
-        gasLimit: BigNumber.from(100_000),
+        gasLimit: BigInt(100_000),
         to: eoa,
-        value: BigNumber.from(0),
+        value: 0n,
         data: '0x',
         authorizationList: [auth],
       });
@@ -626,9 +626,9 @@ export class EIP7702TransactionBuilder {
     delegate: string;
     to?: string | null;
     data?: string;
-    gasLimit?: BigNumber;
+    gasLimit?: bigint;
     chainId?: number;
-    value?: BigNumber;
+    value?: bigint;
   }): Promise<{ raw: string; hash: string; authorization: Authorization }> {
     const chainId = args.chainId ?? CHAIN_ID;
     const eoa = await args.authority.getAddress();
@@ -638,16 +638,16 @@ export class EIP7702TransactionBuilder {
       nonce: status.nonce,
     });
     const fee = await provider.getFeeData();
-    const tip = fee.maxPriorityFeePerGas ?? ethers.utils.parseUnits('0.01', 'gwei');
-    const maxFee = fee.maxFeePerGas ?? (await provider.getGasPrice()).mul(2);
+    const tip = fee.maxPriorityFeePerGas ?? ethers.parseUnits('0.01', 'gwei');
+    const maxFee = fee.maxFeePerGas ?? (((await provider.getFeeData()).gasPrice ?? 0n) * 2n);
 
     const sent = await sendType4Transaction(args.authority, {
       chainId,
       maxPriorityFeePerGas: tip,
-      maxFeePerGas: maxFee.gt(tip) ? maxFee : tip.mul(2),
-      gasLimit: args.gasLimit ?? BigNumber.from(150_000),
+      maxFeePerGas: (maxFee > tip) ? maxFee : (tip * 2n),
+      gasLimit: args.gasLimit ?? BigInt(150_000),
       to: args.to === undefined ? eoa : args.to,
-      value: args.value ?? BigNumber.from(0),
+      value: args.value ?? BigInt(0),
       data: args.data ?? '0x',
       authorizationList: [authorization],
     });
@@ -659,7 +659,7 @@ export class EIP7702TransactionBuilder {
     _delegatedExecutorAddress: string,
     eoaAddress: string,
     chainId: number = CHAIN_ID
-  ): Partial<ethers.providers.TransactionRequest> {
+  ): Partial<ethers.TransactionRequest> {
     return {
       to: eoaAddress,
       type: 4,
@@ -690,10 +690,10 @@ export function encodeBatchExecute(calls: BatchCall[]): {
   }
   const normalized = calls.map((c) => ({
     to: c.to === ZERO_ADDRESS || !c.to ? ZERO_ADDRESS : validateAndChecksumAddress(c.to),
-    value: c.value ?? BigNumber.from(0),
+    value: c.value ?? BigInt(0),
     data: c.data && c.data !== '' ? c.data : '0x',
   }));
-  const executionData = ethers.utils.defaultAbiCoder.encode(
+  const executionData = ethers.AbiCoder.defaultAbiCoder().encode(
     ['tuple(address to,uint256 value,bytes data)[]'],
     [normalized]
   );
@@ -738,11 +738,11 @@ export class BatchEOAExecutor {
     return getDelegationStatus(await this.authority.getAddress());
   }
 
-  private async feeHints(): Promise<{ tip: BigNumber; maxFee: BigNumber }> {
+  private async feeHints(): Promise<{ tip: bigint; maxFee: bigint }> {
     const fee = await provider.getFeeData();
-    const tip = fee.maxPriorityFeePerGas ?? ethers.utils.parseUnits('0.01', 'gwei');
-    const maxFee = fee.maxFeePerGas ?? (await provider.getGasPrice()).mul(2);
-    return { tip, maxFee: maxFee.gt(tip) ? maxFee : tip.mul(2) };
+    const tip = fee.maxPriorityFeePerGas ?? ethers.parseUnits('0.01', 'gwei');
+    const maxFee = fee.maxFeePerGas ?? (((await provider.getFeeData()).gasPrice ?? 0n) * 2n);
+    return { tip, maxFee: (maxFee > tip) ? maxFee : (tip * 2n) };
   }
 
   /**
@@ -751,7 +751,7 @@ export class BatchEOAExecutor {
    */
   async executeBatchCalls(
     calls: BatchCall[],
-    opts?: { gasLimit?: BigNumber; clearAfter?: boolean }
+    opts?: { gasLimit?: bigint; clearAfter?: boolean }
   ): Promise<DelegatedSwapResult> {
     try {
       const eoa = await this.authority.getAddress();
@@ -770,7 +770,7 @@ export class BatchEOAExecutor {
       const auth = await this.authorizer.createAuthorization(status.nonce);
 
       const gasLimit =
-        opts?.gasLimit ?? BigNumber.from(150_000 + calls.length * 200_000);
+        opts?.gasLimit ?? BigInt(150_000 + calls.length * 200_000);
 
       const sent = await sendType4Transaction(this.authority, {
         chainId: this.chainId,
@@ -778,7 +778,7 @@ export class BatchEOAExecutor {
         maxFeePerGas: maxFee,
         gasLimit,
         to: eoa,
-        value: BigNumber.from(0),
+        value: 0n,
         data: encoded.data,
         authorizationList: [auth],
       });
@@ -816,9 +816,9 @@ export class BatchEOAExecutor {
           chainId: this.chainId,
           maxPriorityFeePerGas: tip,
           maxFeePerGas: maxFee,
-          gasLimit: BigNumber.from(100_000),
+          gasLimit: BigInt(100_000),
           to: eoa,
-          value: BigNumber.from(0),
+          value: 0n,
           data: '0x',
           authorizationList: [clearAuth],
         });
@@ -845,21 +845,22 @@ export class BatchEOAExecutor {
   async approveAndSwap(params: {
     tokenIn: string;
     router: string;
-    amountIn: BigNumber;
+    amountIn: bigint;
     path: Buffer | string;
-    minAmountOut: BigNumber;
-    gasLimit?: BigNumber;
+    minAmountOut: bigint;
+    gasLimit?: bigint;
   }): Promise<DelegatedSwapResult> {
     const pathHex =
       typeof params.path === 'string'
         ? params.path
         : bufToHex(Buffer.isBuffer(params.path) ? params.path : Buffer.from(params.path));
 
-    const erc20 = new ethers.utils.Interface([
+    const erc20 = new ethers.Interface([
       'function approve(address spender, uint256 amount) returns (bool)',
     ]);
-    const routerIface = new ethers.utils.Interface([
-      'function exactInput(bytes path, address recipient, uint256 amountIn, uint256 amountOutMinimum) payable returns (uint256)',
+    // SwapRouter02: exactInput((bytes,address,uint256,uint256)) — selector 0xb858183f
+    const routerIface = new ethers.Interface([
+      'function exactInput((bytes path, address recipient, uint256 amountIn, uint256 amountOutMinimum) params) payable returns (uint256 amountOut)',
     ]);
 
     const eoa = await this.authority.getAddress();
@@ -871,10 +872,12 @@ export class BatchEOAExecutor {
       {
         to: params.router,
         data: routerIface.encodeFunctionData('exactInput', [
-          pathHex,
-          eoa,
-          params.amountIn,
-          params.minAmountOut,
+          {
+            path: pathHex,
+            recipient: eoa,
+            amountIn: params.amountIn,
+            amountOutMinimum: params.minAmountOut,
+          },
         ]),
       },
     ];

@@ -1,4 +1,4 @@
-import { BigNumber } from 'ethers';
+import { ethers } from 'ethers';
 
 /**
  * Flash Loan Provider interface
@@ -14,7 +14,7 @@ export interface IFlashLoanProvider {
  */
 export interface FlashLoanRequest {
   token: string;
-  amount: BigNumber;
+  amount: bigint;
   borrower: string;
   initiator: string;
   callbackAddress: string;
@@ -26,8 +26,8 @@ export interface FlashLoanRequest {
  */
 export interface FlashLoanCallback {
   token: string;
-  amount: BigNumber;
-  premium: BigNumber;
+  amount: bigint;
+  premium: bigint;
   initiator: string;
 }
 
@@ -38,7 +38,7 @@ export interface IAaveV3FlashLoan {
   flashLoanSimple(
     receiver: string,
     token: string,
-    amount: BigNumber,
+    amount: bigint,
     params: string,
     referralCode: number
   ): Promise<unknown>;
@@ -46,7 +46,7 @@ export interface IAaveV3FlashLoan {
   flashLoan(
     receiver: string,
     tokens: string[],
-    amounts: BigNumber[],
+    amounts: bigint[],
     modes: number[],
     onBehalfOf: string,
     params: string,
@@ -60,17 +60,17 @@ export interface IAaveV3FlashLoan {
 export interface IFlashLoanExecutor {
   executeFlashLoan(
     token: string,
-    amount: BigNumber,
-    minOutputAmount: BigNumber,
+    amount: bigint,
+    minOutputAmount: bigint,
     path: Buffer
   ): Promise<{
     success: boolean;
     txHash?: string;
-    profit?: BigNumber;
+    profit?: bigint;
     error?: string;
   }>;
 
-  calculateFlashLoanFee(amount: BigNumber): BigNumber;
+  calculateFlashLoanFee(amount: bigint): bigint;
 }
 
 /**

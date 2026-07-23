@@ -1,4 +1,4 @@
-import { BigNumber, providers } from 'ethers';
+import { JsonRpcProvider,    } from 'ethers';
 
 /**
  * MEV Protection Strategy
@@ -26,11 +26,11 @@ export interface MEVProviderConfig {
  * MEV Statistics
  */
 export interface MEVStatistics {
-  extractedValue: BigNumber;
+  extractedValue: bigint;
   sandwichAttempts: number;
   frontrunAttempts: number;
   protectedTxCount: number;
-  avgGasOverhead: BigNumber;
+  avgGasOverhead: bigint;
   successRate: number; // 0-100
 }
 
@@ -57,7 +57,7 @@ export class MEVProtection {
   private fallbackOnFailure: boolean;
   private timeout: number;
   private statistics: MEVStatistics;
-  private publicProvider: providers.JsonRpcProvider | null;
+  private publicProvider: JsonRpcProvider | null;
 
   constructor(config: MEVProviderConfig, publicRpc?: string) {
     this.strategy = config.strategy;
@@ -66,14 +66,14 @@ export class MEVProtection {
     this.fallbackOnFailure = config.fallbackOnFailure;
     this.timeout = config.timeout;
 
-    this.publicProvider = publicRpc ? new providers.JsonRpcProvider(publicRpc) : null;
+    this.publicProvider = publicRpc ? new JsonRpcProvider(publicRpc) : null;
 
     this.statistics = {
-      extractedValue: BigNumber.from(0),
+      extractedValue: 0n,
       sandwichAttempts: 0,
       frontrunAttempts: 0,
       protectedTxCount: 0,
-      avgGasOverhead: BigNumber.from(0),
+      avgGasOverhead: 0n,
       successRate: 100,
     };
   }
@@ -123,7 +123,7 @@ export class MEVProtection {
     }
 
     const response = await Promise.race([
-      this.publicProvider.sendTransaction(signedTx),
+      this.publicProvider.broadcastTransaction(signedTx),
       new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error('Transaction timeout')), this.timeout)
       ),
@@ -142,7 +142,7 @@ export class MEVProtection {
   private async sendViaPrivateRPC(
     signedTx: string
   ): Promise<{ hash: string; protected: boolean; strategy: MEVStrategy }> {
-    const privateProvider = new providers.JsonRpcProvider(this.provider);
+    const privateProvider = new JsonRpcProvider(this.provider);
 
     try {
       const response = await Promise.race([
@@ -210,7 +210,7 @@ export class MEVProtection {
     // In production, would encrypt the transaction
     const encryptedTx = this.encryptTransaction(signedTx);
 
-    const provider = new providers.JsonRpcProvider(this.provider);
+    const provider = new JsonRpcProvider(this.provider);
     const response = await Promise.race([
       provider.send('eth_sendEncryptedTransaction', [encryptedTx]),
       new Promise<never>((_, reject) =>
@@ -299,6 +299,14 @@ export class MEVProtection {
 
       // Analyze surrounding transactions
       const block = await this.publicProvider.getBlock(tx.blockNumber);
+      if (!block) {
+        return {
+          suspicious: false,
+          sandwichScore: 0,
+          frontrunScore: 0,
+          details: ['Block not found'],
+        };
+      }
       const txIndex = block.transactions.indexOf(targetTxHash);
       const details: string[] = [];
       let sandwichScore = 0;
@@ -307,7 +315,7 @@ export class MEVProtection {
       // Check for front-run
       if (txIndex > 0) {
         const prevTx = await this.publicProvider.getTransaction(block.transactions[txIndex - 1]);
-        if (prevTx && prevTx.to === tx.to && prevTx.gasPrice?.gte(tx.gasPrice || 0)) {
+        if (prevTx && prevTx.to === tx.to && ((prevTx.gasPrice ?? 0n) >= (tx.gasPrice ?? 0n))) {
           frontrunScore += 30;
           details.push('Front-run candidate detected');
         }
@@ -316,15 +324,15 @@ export class MEVProtection {
       // Check for back-run (sandwich)
       if (txIndex < block.transactions.length - 1) {
         const nextTx = await this.publicProvider.getTransaction(block.transactions[txIndex + 1]);
-        if (nextTx && nextTx.to === tx.to && nextTx.gasPrice?.gte(tx.gasPrice || 0)) {
+        if (nextTx && nextTx.to === tx.to && ((nextTx.gasPrice ?? 0n) >= (tx.gasPrice ?? 0n))) {
           sandwichScore += 40;
           details.push('Back-run candidate detected');
         }
       }
 
       // Analyze gas prices
-      const avgGasPrice = block.transactions.length > 0 ? BigNumber.from(0) : BigNumber.from(0); // Simplified
-      if (tx.gasPrice && tx.gasPrice.gte(avgGasPrice.mul(2))) {
+      const avgGasPrice = 0n; // simplified
+      if (tx.gasPrice && tx.gasPrice >= avgGasPrice * 2n) {
         frontrunScore += 20;
         details.push('Unusually high gas price');
       }
@@ -398,11 +406,11 @@ export class MEVProtection {
    */
   resetStatistics(): void {
     this.statistics = {
-      extractedValue: BigNumber.from(0),
+      extractedValue: 0n,
       sandwichAttempts: 0,
       frontrunAttempts: 0,
       protectedTxCount: 0,
-      avgGasOverhead: BigNumber.from(0),
+      avgGasOverhead: 0n,
       successRate: 100,
     };
   }

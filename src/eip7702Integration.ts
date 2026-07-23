@@ -1,4 +1,4 @@
-import { BigNumber, ethers, Wallet } from 'ethers';
+import { ethers, Wallet } from 'ethers';
 import { Logger } from './logger';
 import PreFlightValidator from './preFlightValidator';
 import EIP7702TestHarness from './eip7702TestHarness';
@@ -19,13 +19,15 @@ const logger = new Logger('EIP7702Integration');
  * eth_sendRawTransaction), not a plain Contract.executeSwap call.
  */
 export class EIP7702Integration {
-  private provider: ethers.providers.JsonRpcProvider;
+  private provider: ethers.JsonRpcProvider;
+  private providerUrl: string;
   private signer: Wallet;
   private validator: PreFlightValidator;
   private debugger: DelegationDebugger;
 
   constructor(providerUrl: string, signerKey: string) {
-    this.provider = new ethers.providers.JsonRpcProvider(providerUrl);
+    this.providerUrl = providerUrl;
+    this.provider = new ethers.JsonRpcProvider(providerUrl);
     this.signer = new Wallet(signerKey, this.provider);
     this.validator = new PreFlightValidator(this.provider);
     this.debugger = new DelegationDebugger();
@@ -34,16 +36,16 @@ export class EIP7702Integration {
   async executeDelegatedSwap(params: {
     delegatedExecutor: string;
     tokenIn: string;
-    amountIn: BigNumber;
-    minAmountOut: BigNumber;
+    amountIn: bigint;
+    minAmountOut: bigint;
     deadline: number;
     swapPath: string | Buffer;
     clearAfter?: boolean;
   }): Promise<{
     success: boolean;
     txHash?: string;
-    gasUsed?: BigNumber;
-    amountOut?: BigNumber;
+    gasUsed?: bigint;
+    amountOut?: bigint;
     error?: string;
     delegationCode?: string;
   }> {
@@ -90,7 +92,7 @@ export class EIP7702Integration {
         eoaNonce: status.nonce,
         eoaEth: await this.provider.getBalance(eoa),
         executorCode: true,
-        approval: BigNumber.from(0),
+        approval: 0n,
         deadline: params.deadline,
       });
 
@@ -143,8 +145,8 @@ export class EIP7702Integration {
       this.debugger.logSettlement({
         txHash: result.txHash || '',
         blockNumber: 0,
-        gasUsed: result.gasUsed || BigNumber.from(0),
-        transactionFee: BigNumber.from(0),
+        gasUsed: result.gasUsed || 0n,
+        transactionFee: 0n,
         status: 'success',
       });
 
@@ -173,7 +175,7 @@ export class EIP7702Integration {
   async runDiagnostics(): Promise<void> {
     logger.info('Running comprehensive EIP-7702 diagnostics...');
     const harness = new EIP7702TestHarness(
-      this.provider.connection.url,
+      this.providerUrl,
       this.signer.privateKey
     );
     const results = await harness.runFullTestSuite();
@@ -187,8 +189,8 @@ export class EIP7702Integration {
   async simulateDelegatedSwap(params: {
     delegatedExecutor: string;
     tokenIn: string;
-    amountIn: BigNumber;
-    minAmountOut: BigNumber;
+    amountIn: bigint;
+    minAmountOut: bigint;
     deadline: number;
     swapPath: string;
   }): Promise<{
@@ -229,8 +231,8 @@ export async function executeWithFullDebugging(options: {
   const simulation = await integration.simulateDelegatedSwap({
     delegatedExecutor: options.delegatedExecutor,
     tokenIn: options.tokenIn,
-    amountIn: ethers.utils.parseEther(options.amountIn),
-    minAmountOut: ethers.utils.parseEther(options.minAmountOut),
+    amountIn: ethers.parseEther(options.amountIn),
+    minAmountOut: ethers.parseEther(options.minAmountOut),
     deadline: Math.floor(Date.now() / 1000) + 300,
     swapPath: options.swapPath,
   });
@@ -245,8 +247,8 @@ export async function executeWithFullDebugging(options: {
   const result = await integration.executeDelegatedSwap({
     delegatedExecutor: options.delegatedExecutor,
     tokenIn: options.tokenIn,
-    amountIn: ethers.utils.parseEther(options.amountIn),
-    minAmountOut: ethers.utils.parseEther(options.minAmountOut),
+    amountIn: ethers.parseEther(options.amountIn),
+    minAmountOut: ethers.parseEther(options.minAmountOut),
     deadline: Math.floor(Date.now() / 1000) + 300,
     swapPath: options.swapPath,
   });

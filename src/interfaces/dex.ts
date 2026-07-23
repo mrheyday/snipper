@@ -1,4 +1,4 @@
-import { BigNumber } from 'ethers';
+import { ethers } from 'ethers';
 
 /**
  * DEX types and fee tiers
@@ -28,8 +28,8 @@ export interface IPool {
   token0: string;
   token1: string;
   fee?: FeeTier;
-  liquidity?: BigNumber;
-  sqrtPriceX96?: BigNumber;
+  liquidity?: bigint;
+  sqrtPriceX96?: bigint;
   tick?: number;
   dex: DEXType;
 }
@@ -40,8 +40,8 @@ export interface IPool {
 export interface SwapParams {
   tokenIn: string;
   tokenOut: string;
-  amountIn: BigNumber;
-  minAmountOut: BigNumber;
+  amountIn: bigint;
+  minAmountOut: bigint;
   deadline: number;
   path?: string[]; // Optional routing path for multi-hop
   feeTiers?: FeeTier[]; // Fee tiers for each hop
@@ -52,23 +52,23 @@ export interface SwapParams {
  * Swap result
  */
 export interface SwapResult {
-  amountOut: BigNumber;
+  amountOut: bigint;
   priceImpact: number; // in basis points
-  executionPrice: BigNumber;
+  executionPrice: bigint;
   path: string[];
-  gasEstimate: BigNumber;
+  gasEstimate: bigint;
 }
 
 /**
  * Quote result
  */
 export interface QuoteResult {
-  amountIn: BigNumber;
-  amountOut: BigNumber;
+  amountIn: bigint;
+  amountOut: bigint;
   priceImpact: number; // in basis points
-  executionPrice: BigNumber;
-  fee: BigNumber;
-  gasEstimate: BigNumber;
+  executionPrice: bigint;
+  fee: bigint;
+  gasEstimate: bigint;
 }
 
 /**
@@ -78,9 +78,9 @@ export interface IUniswapV3Pool {
   token0(): Promise<string>;
   token1(): Promise<string>;
   fee(): Promise<FeeTier>;
-  liquidity(): Promise<BigNumber>;
+  liquidity(): Promise<bigint>;
   slot0(): Promise<{
-    sqrtPriceX96: BigNumber;
+    sqrtPriceX96: bigint;
     tick: number;
     observationIndex: number;
     observationCardinality: number;
@@ -91,8 +91,8 @@ export interface IUniswapV3Pool {
   swap(
     recipient: string,
     zeroForOne: boolean,
-    amountSpecified: BigNumber,
-    sqrtPriceLimitX96: BigNumber,
+    amountSpecified: bigint,
+    sqrtPriceLimitX96: bigint,
     data: string
   ): Promise<unknown>;
 }
@@ -102,20 +102,20 @@ export interface IUniswapV3Pool {
  */
 export interface IUniswapV3Router {
   swapExactTokensForTokens(
-    amountIn: BigNumber,
-    amountOutMinimum: BigNumber,
+    amountIn: bigint,
+    amountOutMinimum: bigint,
     path: string[],
     to: string,
     deadline: number
-  ): Promise<BigNumber[]>;
+  ): Promise<bigint[]>;
 
   swapTokensForExactTokens(
-    amountOut: BigNumber,
-    amountInMaximum: BigNumber,
+    amountOut: bigint,
+    amountInMaximum: bigint,
     path: string[],
     to: string,
     deadline: number
-  ): Promise<BigNumber[]>;
+  ): Promise<bigint[]>;
 }
 
 /**
@@ -126,17 +126,17 @@ export interface IUniswapV3Quoter {
     tokenIn: string,
     tokenOut: string,
     fee: FeeTier,
-    amountIn: BigNumber,
-    sqrtPriceLimitX96: BigNumber
-  ): Promise<{ amountOut: BigNumber }>;
+    amountIn: bigint,
+    sqrtPriceLimitX96: bigint
+  ): Promise<{ amountOut: bigint }>;
 
   quoteExactOutputSingle(
     tokenIn: string,
     tokenOut: string,
     fee: FeeTier,
-    amount: BigNumber,
-    sqrtPriceLimitX96: BigNumber
-  ): Promise<{ amountIn: BigNumber }>;
+    amount: bigint,
+    sqrtPriceLimitX96: bigint
+  ): Promise<{ amountIn: bigint }>;
 }
 
 /**
@@ -145,7 +145,7 @@ export interface IUniswapV3Quoter {
 export interface IDEXAggregator {
   getQuote(params: SwapParams): Promise<QuoteResult>;
   executeSwap(params: SwapParams): Promise<SwapResult>;
-  getBestRoute(tokenIn: string, tokenOut: string, amountIn: BigNumber): Promise<SwapParams>;
+  getBestRoute(tokenIn: string, tokenOut: string, amountIn: bigint): Promise<SwapParams>;
 }
 
 /**
@@ -154,7 +154,7 @@ export interface IDEXAggregator {
 export interface IPoolMonitor {
   watchPool(poolAddress: string): void;
   unwatchPool(poolAddress: string): void;
-  getPriceUpdate(poolAddress: string): Promise<{ price: BigNumber; timestamp: number }>;
+  getPriceUpdate(poolAddress: string): Promise<{ price: bigint; timestamp: number }>;
 }
 
 /**
@@ -188,10 +188,10 @@ export interface SlippageConfig {
  * Execution config
  */
 export interface ExecutionConfig {
-  gasLimit?: BigNumber;
-  gasPrice?: BigNumber;
-  maxFeePerGas?: BigNumber;
-  maxPriorityFeePerGas?: BigNumber;
+  gasLimit?: bigint;
+  gasPrice?: bigint;
+  maxFeePerGas?: bigint;
+  maxPriorityFeePerGas?: bigint;
   slippage: SlippageConfig;
   deadline: number; // in seconds
 }

@@ -1,4 +1,4 @@
-import { BigNumber, ethers } from 'ethers';
+import { ethers } from 'ethers';
 import { getTokens } from './tokens';
 import { ExecutionBridge, ExecutionMode } from './bridge';
 import { encodePath, validatePath, getOptimalFee } from './uniswap';
@@ -18,11 +18,11 @@ import { bitquery } from './bitquery';
 interface OpportunityParams {
   tokenIn: string;
   tokenOut: string;
-  amountIn: BigNumber;
+  amountIn: bigint;
   path: Buffer;
-  minAmountOut: BigNumber;
+  minAmountOut: bigint;
   deadline: number;
-  estimatedProfit: BigNumber;
+  estimatedProfit: bigint;
   poolAddress?: string;
 }
 
@@ -100,7 +100,7 @@ class SniperBot {
       } else {
         const bal0 = await Token0.contract.balanceOf(walletAddress);
         const bal1 = await Token1.contract.balanceOf(walletAddress);
-        if (bal0.isZero() && bal1.gt(0)) {
+        if ((bal0 === 0n) && (bal1 > 0)) {
           tokenFromObj = Token1;
           tokenToObj = Token0;
         }
@@ -115,11 +115,11 @@ class SniperBot {
 
       // Validate wallet balances
       const walletBalance = await provider.getBalance(walletAddress);
-      logger.info(`Wallet ETH balance: ${ethers.utils.formatEther(walletBalance)} ETH`);
+      logger.info(`Wallet ETH balance: ${ethers.formatEther(walletBalance)} ETH`);
 
       const tokenBalance = await tokenFromObj.contract.balanceOf(walletAddress);
       logger.info(
-        `Input token balance: ${ethers.utils.formatUnits(tokenBalance, tokenFrom.decimals)} ${tokenFrom.symbol}`
+        `Input token balance: ${ethers.formatUnits(tokenBalance, tokenFrom.decimals)} ${tokenFrom.symbol}`
       );
 
       // Flash loans require zero upfront capital — no balance check needed.
@@ -131,7 +131,7 @@ class SniperBot {
       // best fee tier. FlashSizer will re-quote at the dynamically computed size.
       logger.info('Discovering best DEX route and fee tier...');
       const dexAggregator = new DEXAggregator(provider);
-      const probeAmount = ethers.utils.parseUnits('1', tokenFrom.decimals);
+      const probeAmount = ethers.parseUnits('1', tokenFrom.decimals);
       const bestRoute = await dexAggregator.findBestRoute(
         tokenFrom.address,
         tokenTo.address,
@@ -145,12 +145,24 @@ class SniperBot {
 
       logger.info(`Fee tier selected: ${feeTier} (${(feeTier / 10000) * 100}%)`);
 
-      // Encode swap path
-      const path = encodePath([tokenFrom.address, tokenTo.address], [feeTier]);
+      // FlashLoanSimple requires repay in the SAME asset. Path must round-trip:
+      //   tokenFrom → tokenTo → tokenFrom  (2 hops, same fee tier for simplicity)
+      const path = encodePath(
+        [tokenFrom.address, tokenTo.address, tokenFrom.address],
+        [feeTier, feeTier]
+      );
 
-      if (!validatePath([tokenFrom.address, tokenTo.address], [feeTier])) {
-        throw new Error('Invalid swap path');
+      if (
+        !validatePath(
+          [tokenFrom.address, tokenTo.address, tokenFrom.address],
+          [feeTier, feeTier]
+        )
+      ) {
+        throw new Error('Invalid round-trip swap path');
       }
+      logger.info(
+        `Round-trip path for flash repay: ${tokenFrom.symbol} → ${tokenTo.symbol} → ${tokenFrom.symbol}`
+      );
 
       // In dynamic flash-loan mode, amountIn and minAmountOut are sentinels —
       // FlashSizer inside the bridge will compute the actual optimal loan size
@@ -183,9 +195,9 @@ class SniperBot {
           tokenOut: tokenTo.address,
           amountIn: sentinelAmount, // overridden by FlashSizer inside the bridge
           path,
-          minAmountOut: BigNumber.from(0), // overridden by FlashSizer inside the bridge
+          minAmountOut: 0n, // overridden by FlashSizer inside the bridge
           deadline: DEADLINE,
-          estimatedProfit: BigNumber.from(0),
+          estimatedProfit: 0n,
           poolAddress: detectedPool,
         });
 
@@ -197,7 +209,7 @@ class SniperBot {
         logger.info(`  Mode: ${result.mode}`);
         logger.info(`  Tx: ${result.txHash}`);
         logger.info(`  Gas: ${result.gasUsed?.toString()}`);
-        logger.info(`  Profit: ${ethers.utils.formatUnits(result.profit || 0, 18)}`);
+        logger.info(`  Profit: ${ethers.formatUnits(result.profit || 0, 18)}`);
       } finally {
         tradeWatch?.unsubscribe();
       }

@@ -1,4 +1,4 @@
-import { BigNumber, ethers } from 'ethers';
+import { ethers } from 'ethers';
 import { Logger } from './logger';
 
 const logger = new Logger('DelegationDebugger');
@@ -12,7 +12,7 @@ export interface DelegationState {
   eoa: string;
   executor: string;
   tokenIn: string;
-  amountIn: BigNumber;
+  amountIn: bigint;
   details: Record<string, unknown>;
   error?: string;
 }
@@ -32,13 +32,13 @@ export class DelegationDebugger {
   /**
    * Log initialization phase
    */
-  logInit(params: { eoa: string; executor: string; tokenIn: string; amountIn: BigNumber }): void {
+  logInit(params: { eoa: string; executor: string; tokenIn: string; amountIn: bigint }): void {
     this.addState('init', params, {
       initiatedAt: new Date().toISOString(),
       eoa: params.eoa,
       executor: params.executor,
       token: params.tokenIn,
-      amount: ethers.utils.formatUnits(params.amountIn, 18),
+      amount: ethers.formatUnits(params.amountIn, 18),
     });
 
     logger.info('🔄 EIP-7702 Delegation Flow Started');
@@ -48,7 +48,7 @@ export class DelegationDebugger {
     logger.info(`EOA Address: ${params.eoa}`);
     logger.info(`Executor: ${params.executor}`);
     logger.info(`Token In: ${params.tokenIn}`);
-    logger.info(`Amount: ${ethers.utils.formatUnits(params.amountIn, 18)}`);
+    logger.info(`Amount: ${ethers.formatUnits(params.amountIn, 18)}`);
     logger.info('═'.repeat(70));
   }
 
@@ -56,40 +56,40 @@ export class DelegationDebugger {
    * Log validation checks
    */
   logValidation(checks: {
-    eoaBalance: { has: BigNumber; needs: BigNumber };
+    eoaBalance: { has: bigint; needs: bigint };
     eoaNonce: number;
-    eoaEth: BigNumber;
+    eoaEth: bigint;
     executorCode: boolean;
-    approval: BigNumber;
+    approval: bigint;
     deadline: number;
   }): void {
     this.addState('validation', checks, {
-      eoaBalance: ethers.utils.formatUnits(checks.eoaBalance.has, 18),
-      needsBalance: ethers.utils.formatUnits(checks.eoaBalance.needs, 18),
-      balanceSufficient: checks.eoaBalance.has.gte(checks.eoaBalance.needs),
+      eoaBalance: ethers.formatUnits(checks.eoaBalance.has, 18),
+      needsBalance: ethers.formatUnits(checks.eoaBalance.needs, 18),
+      balanceSufficient: (checks.eoaBalance.has >= checks.eoaBalance.needs),
       eoaNonce: checks.eoaNonce,
-      eoaEth: ethers.utils.formatEther(checks.eoaEth),
+      eoaEth: ethers.formatEther(checks.eoaEth),
       hasExecutorCode: checks.executorCode,
-      approved: ethers.utils.formatUnits(checks.approval, 18),
+      approved: ethers.formatUnits(checks.approval, 18),
       deadlineValid: checks.deadline > Math.floor(Date.now() / 1000),
     });
 
     logger.info('PHASE 2: PRE-FLIGHT VALIDATION');
     logger.info('─'.repeat(70));
 
-    const balanceSufficient = checks.eoaBalance.has.gte(checks.eoaBalance.needs);
+    const balanceSufficient = (checks.eoaBalance.has >= checks.eoaBalance.needs);
     logger.info(
-      `${balanceSufficient ? '✅' : '❌'} Token Balance: ${ethers.utils.formatUnits(
+      `${balanceSufficient ? '✅' : '❌'} Token Balance: ${ethers.formatUnits(
         checks.eoaBalance.has,
         18
-      )} (need ${ethers.utils.formatUnits(checks.eoaBalance.needs, 18)})`
+      )} (need ${ethers.formatUnits(checks.eoaBalance.needs, 18)})`
     );
 
     logger.info(`✅ EOA Nonce: ${checks.eoaNonce}`);
 
-    const ethSufficient = checks.eoaEth.gt(ethers.utils.parseEther('0.001'));
+    const ethSufficient = checks.eoaEth > ethers.parseEther('0.001');
     logger.info(
-      `${ethSufficient ? '✅' : '⚠️'} Gas (ETH): ${ethers.utils.formatEther(checks.eoaEth)}`
+      `${ethSufficient ? '✅' : '⚠️'} Gas (ETH): ${ethers.formatEther(checks.eoaEth)}`
     );
 
     logger.info(
@@ -99,7 +99,7 @@ export class DelegationDebugger {
     );
 
     logger.info(
-      `${checks.approval.gt(0) ? '✅' : '⚠️'} Approval: ${ethers.utils.formatUnits(
+      `${(checks.approval > 0) ? '✅' : '⚠️'} Approval: ${ethers.formatUnits(
         checks.approval,
         18
       )}`
@@ -119,7 +119,7 @@ export class DelegationDebugger {
   logApproval(params: {
     token: string;
     executor: string;
-    amount: BigNumber;
+    amount: bigint;
     txHash?: string;
     status: 'pending' | 'confirmed' | 'failed';
   }): void {
@@ -135,7 +135,7 @@ export class DelegationDebugger {
     logger.info(`${icon} Status: ${params.status.toUpperCase()}`);
     logger.info(`Token: ${params.token}`);
     logger.info(`Spender: ${params.executor}`);
-    logger.info(`Amount: ${ethers.utils.formatUnits(params.amount, 18)}`);
+    logger.info(`Amount: ${ethers.formatUnits(params.amount, 18)}`);
 
     if (params.txHash) {
       logger.info(`Transaction: ${params.txHash}`);
@@ -182,13 +182,13 @@ export class DelegationDebugger {
     eoa: string;
     executor: string;
     tokenIn: string;
-    amountIn: BigNumber;
-    minAmountOut: BigNumber;
+    amountIn: bigint;
+    minAmountOut: bigint;
     deadline: number;
-    gasEstimate?: BigNumber;
-    gasLimit?: BigNumber;
-    maxFeePerGas?: BigNumber;
-    maxPriorityFeePerGas?: BigNumber;
+    gasEstimate?: bigint;
+    gasLimit?: bigint;
+    maxFeePerGas?: bigint;
+    maxPriorityFeePerGas?: bigint;
     txHash?: string;
     status: 'pending' | 'confirmed' | 'failed';
     error?: string;
@@ -209,8 +209,8 @@ export class DelegationDebugger {
     logger.info(`  EOA: ${params.eoa}`);
     logger.info(`  Executor: ${params.executor}`);
     logger.info(`  Token In: ${params.tokenIn}`);
-    logger.info(`  Amount In: ${ethers.utils.formatUnits(params.amountIn, 18)}`);
-    logger.info(`  Min Amount Out: ${ethers.utils.formatUnits(params.minAmountOut, 18)}`);
+    logger.info(`  Amount In: ${ethers.formatUnits(params.amountIn, 18)}`);
+    logger.info(`  Min Amount Out: ${ethers.formatUnits(params.minAmountOut, 18)}`);
     logger.info(`  Deadline: ${new Date(params.deadline * 1000).toISOString()}`);
 
     if (params.gasEstimate || params.gasLimit) {
@@ -226,11 +226,11 @@ export class DelegationDebugger {
     if (params.maxFeePerGas || params.maxPriorityFeePerGas) {
       logger.info(`\n💰 Fee Market (EIP-1559):`);
       if (params.maxFeePerGas) {
-        logger.info(`  Max Fee: ${ethers.utils.formatUnits(params.maxFeePerGas, 'gwei')} gwei`);
+        logger.info(`  Max Fee: ${ethers.formatUnits(params.maxFeePerGas, 'gwei')} gwei`);
       }
       if (params.maxPriorityFeePerGas) {
         logger.info(
-          `  Priority Fee: ${ethers.utils.formatUnits(params.maxPriorityFeePerGas, 'gwei')} gwei`
+          `  Priority Fee: ${ethers.formatUnits(params.maxPriorityFeePerGas, 'gwei')} gwei`
         );
       }
     }
@@ -252,17 +252,17 @@ export class DelegationDebugger {
   logSettlement(params: {
     txHash: string;
     blockNumber: number;
-    gasUsed: BigNumber;
-    transactionFee: BigNumber;
-    amountOut?: BigNumber;
-    profit?: BigNumber;
+    gasUsed: bigint;
+    transactionFee: bigint;
+    amountOut?: bigint;
+    profit?: bigint;
     status: 'success' | 'failed' | 'reverted';
     reason?: string;
   }): void {
     this.addState('settlement', params, {
       status: params.status,
       gasUsed: params.gasUsed.toString(),
-      transactionFee: ethers.utils.formatEther(params.transactionFee),
+      transactionFee: ethers.formatEther(params.transactionFee),
     });
 
     logger.info('PHASE 6: SETTLEMENT');
@@ -275,17 +275,17 @@ export class DelegationDebugger {
     logger.info(`  Hash: ${params.txHash}`);
     logger.info(`  Block: #${params.blockNumber}`);
     logger.info(`  Gas Used: ${params.gasUsed.toString()}`);
-    logger.info(`  Fee: ${ethers.utils.formatEther(params.transactionFee)} ETH`);
+    logger.info(`  Fee: ${ethers.formatEther(params.transactionFee)} ETH`);
 
     if (params.amountOut) {
-      logger.info(`  Amount Out: ${ethers.utils.formatUnits(params.amountOut, 18)}`);
+      logger.info(`  Amount Out: ${ethers.formatUnits(params.amountOut, 18)}`);
     }
 
     if (params.profit) {
       const profitAmount = params.profit;
-      const isProfitable = profitAmount.gt(0);
+      const isProfitable = (profitAmount > 0);
       logger.info(
-        `  Profit: ${ethers.utils.formatUnits(profitAmount, 18)} ${isProfitable ? '📈' : '📉'}`
+        `  Profit: ${ethers.formatUnits(profitAmount, 18)} ${isProfitable ? '📈' : '📉'}`
       );
     }
 
@@ -349,7 +349,7 @@ export class DelegationDebugger {
       eoa: (details.eoa as string) || '',
       executor: (details.executor as string) || '',
       tokenIn: (details.tokenIn as string) || '',
-      amountIn: (details.amountIn as BigNumber) || BigNumber.from(0),
+      amountIn: (details.amountIn as bigint) || 0n,
       details: { ...details, ...extra },
     });
   }

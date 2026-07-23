@@ -39,6 +39,8 @@ interface ISwapExecutor {
 error Unauthorized();
 error FlashLoanFailed();
 error InsufficientRepayment(uint256 available, uint256 required);
+error PathMustEndInBorrowAsset(address pathEnd, address borrowAsset);
+error InvalidSwapPath();
 
 /// @title FlashLoanReceiver
 /// @notice Aave V3 flashLoanSimple receiver for single-block arbitrage on Arbitrum.
@@ -66,6 +68,7 @@ contract FlashLoanReceiver {
     }
 
     constructor(address _swapExecutor, address _lendingPool) {
+        require(_swapExecutor != address(0) && _lendingPool != address(0), "zero address");
         owner = msg.sender;
         swapExecutor = _swapExecutor;
         lendingPool = _lendingPool;
@@ -85,6 +88,11 @@ contract FlashLoanReceiver {
         external
         onlyOwner
     {
+        // Min 2 hops (66 bytes): token|fee|mid|fee|token — single hop cannot repay flash.
+        if (swapPath.length < 66 || (swapPath.length - 20) % 23 != 0) revert InvalidSwapPath();
+        address pathEnd = address(bytes20(swapPath[swapPath.length - 20:]));
+        if (pathEnd != token) revert PathMustEndInBorrowAsset(pathEnd, token);
+
         bytes memory params = abi.encode(token, swapPath, minAmountOut);
         // receiverAddress = address(this): same-contract path from Aave docs
         IPool(lendingPool).flashLoanSimple(address(this), token, amount, params, 0);
@@ -133,6 +141,7 @@ contract FlashLoanReceiver {
     /// @param to Recipient address
     /// @param amount Amount to withdraw (0 = all)
     function withdraw(address token, address to, uint256 amount) external onlyOwner {
+        require(to != address(0), "Invalid recipient");
         if (amount == 0) amount = IERC20(token).balanceOf(address(this));
         SafeTransferLib.safeTransfer(token, to, amount);
     }

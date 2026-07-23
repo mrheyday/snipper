@@ -3,7 +3,7 @@
  * digest and never attaches authorizationList to a type-4 tx. Kept only so
  * existing imports do not break during the cutover.
  */
-import { BigNumber, ethers } from 'ethers';
+import { ethers } from 'ethers';
 import { signer, provider } from './config';
 import { Logger } from './logger';
 import { validateAndChecksumAddress } from './validation';
@@ -39,18 +39,18 @@ interface EIP7702Authorization {
 
 interface DelegatedSwapParams {
   tokenIn: string;
-  amountIn: BigNumber;
+  amountIn: bigint;
   path: Buffer;
-  minAmountOut: BigNumber;
+  minAmountOut: bigint;
   deadline: number;
 }
 
 interface DelegatedSwapResult {
   success: boolean;
   txHash?: string;
-  amountOut?: BigNumber;
+  amountOut?: bigint;
   error?: string;
-  gasUsed?: BigNumber;
+  gasUsed?: bigint;
   authorizationData?: string;
 }
 
@@ -81,16 +81,16 @@ export class EIP7702AuthorizationSigner {
 
     // Build authorization hash per EIP-7702 spec
     // hash = keccak256(0x05 || chainId || address || nonce)
-    const encodedData = ethers.utils.solidityPack(
+    const encodedData = ethers.solidityPacked(
       ['bytes1', 'uint256', 'address', 'uint256'],
       ['0x05', this.chainId, this.delegatedExecutor, nonce]
     );
 
-    const authHash = ethers.utils.keccak256(encodedData);
+    const authHash = ethers.keccak256(encodedData);
 
     // Sign authorization
-    const sig = await signer.signMessage(ethers.utils.arrayify(authHash));
-    const { v, r, s } = ethers.utils.splitSignature(sig);
+    const sig = await signer.signMessage(ethers.getBytes(authHash));
+    const { v, r, s } = ethers.Signature.from(sig);
 
     logger.info(`Authorization signed: r=${r.slice(0, 10)}...`);
 
@@ -108,7 +108,7 @@ export class EIP7702AuthorizationSigner {
    * Encode authorization for inclusion in transaction
    */
   encodeAuthorizationList(auth: EIP7702Authorization): string {
-    return ethers.utils.solidityPack(
+    return ethers.solidityPacked(
       ['address', 'uint256', 'bytes32', 'bytes32', 'uint8'],
       [auth.address, auth.nonce, auth.r, auth.s, auth.yParity]
     );
@@ -144,7 +144,7 @@ export class EIP7702DelegatedExecutor {
 
     try {
       logger.info('Executing delegated swap via EIP-7702');
-      logger.info(`Input: ${ethers.utils.formatUnits(params.amountIn, 18)}`);
+      logger.info(`Input: ${ethers.formatUnits(params.amountIn, 18)}`);
       logger.info(`Deadline: ${new Date(params.deadline * 1000).toISOString()}`);
 
       // Create authorization
@@ -155,7 +155,7 @@ export class EIP7702DelegatedExecutor {
 
       // Estimate gas
       try {
-        const gasEstimate = await this.delegatedExecutor.estimateGas.executeSwap(
+        const gasEstimate = await this.delegatedExecutor.executeSwap.estimateGas(
           params.tokenIn,
           params.amountIn,
           params.path,
@@ -181,7 +181,7 @@ export class EIP7702DelegatedExecutor {
         params.minAmountOut,
         params.deadline,
         {
-          gasLimit: BigNumber.from('300000'), // Conservative estimate
+          gasLimit: BigInt('300000'), // Conservative estimate
           // EIP-7702 fields would be added by provider if supported:
           // authorizationList: [auth],
         }
@@ -260,7 +260,7 @@ export class EIP7702DelegatedExecutor {
 
       // Execute batch
       const tx = await this.delegatedExecutor.executeBatchSwaps(swapRequests, deadline, {
-        gasLimit: BigNumber.from('500000'), // Conservative estimate for batch
+        gasLimit: BigInt('500000'), // Conservative estimate for batch
       });
 
       txHash = tx.hash;

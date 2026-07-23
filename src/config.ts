@@ -1,5 +1,5 @@
 import { Percent } from '@uniswap/sdk-core';
-import { providers, Wallet } from 'ethers';
+import { JsonRpcProvider, Wallet, type Provider } from 'ethers';
 import { config as loadEnvironmentVariables } from 'dotenv';
 import {
   getRequiredEnv,
@@ -58,7 +58,7 @@ export const SLIPPAGE_TOLERANCE = new Percent(SLIPPAGE_BPS, 10000);
 
 const RPC_URL = getRequiredEnv('RPC');
 validateRPC(RPC_URL);
-export const provider = new providers.JsonRpcProvider(RPC_URL);
+export const provider = new JsonRpcProvider(RPC_URL);
 
 export const signer = new Wallet(WALLET_PRIVATE_KEY, provider);
 

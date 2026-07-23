@@ -2,16 +2,16 @@ import { ethers } from 'ethers';
 import { validateAndChecksumAddress, validateFeeTier } from './validation';
 
 export interface IUniswapV3Router02 {
-  exactInput(params: ExactInputParams): Promise<ethers.BigNumber>;
-  exactInputSingle(params: ExactInputSingleParams): Promise<ethers.BigNumber>;
+  exactInput(params: ExactInputParams): Promise<bigint>;
+  exactInputSingle(params: ExactInputSingleParams): Promise<bigint>;
 }
 
 export interface ExactInputParams {
   path: Buffer;
   recipient: string;
   deadline: number;
-  amountIn: ethers.BigNumber;
-  amountOutMinimum: ethers.BigNumber;
+  amountIn: bigint;
+  amountOutMinimum: bigint;
 }
 
 export interface ExactInputSingleParams {
@@ -20,9 +20,9 @@ export interface ExactInputSingleParams {
   fee: number;
   recipient: string;
   deadline: number;
-  amountIn: ethers.BigNumber;
-  amountOutMinimum: ethers.BigNumber;
-  sqrtPriceLimitX96: ethers.BigNumber;
+  amountIn: bigint;
+  amountOutMinimum: bigint;
+  sqrtPriceLimitX96: bigint;
 }
 
 /**
@@ -81,7 +81,7 @@ export function decodePath(encoded: string | Buffer): {
   while (offset < cleanHex.length) {
     // Read token (20 bytes = 40 hex chars)
     const token = '0x' + cleanHex.slice(offset, offset + 40);
-    tokens.push(ethers.utils.getAddress(token));
+    tokens.push(ethers.getAddress(token));
     offset += 40;
 
     // Read fee (3 bytes = 6 hex chars) if not at end
@@ -124,11 +124,11 @@ export function getOptimalFee(tokenA: string, tokenB: string): number {
  * @returns Minimum acceptable output
  */
 export function calculateMinimumOutput(
-  expectedOutput: ethers.BigNumber,
+  expectedOutput: bigint,
   slippagePercent: number
-): ethers.BigNumber {
+): bigint {
   const slippageBps = Math.floor(slippagePercent * 100); // Convert to basis points
-  return expectedOutput.mul(10000 - slippageBps).div(10000);
+  return expectedOutput * BigInt(10000 - slippageBps) / BigInt(10000);
 }
 
 /**

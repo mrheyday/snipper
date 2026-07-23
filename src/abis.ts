@@ -55,24 +55,32 @@ export const DELEGATED_EXECUTOR_ABI = [
   'function owner() external view returns (address)',
   'function balance(address token) external view returns (uint256)',
 
-  // State-changing functions
-  'function executeSwap(address tokenIn, address tokenOut, uint256 amountIn, uint256 minAmountOut, bytes calldata path) external payable returns (uint256 amountOut)',
-  'function executeSwapWithCallback(address tokenIn, address tokenOut, uint256 amountIn, uint256 minAmountOut, bytes calldata path, bytes calldata callbackData) external payable returns (uint256 amountOut)',
-  'function executeBatchSwaps(tuple(address tokenIn, address tokenOut, uint256 amountIn, uint256 minAmountOut, bytes path)[] swaps) external payable returns (uint256[] amountOuts)',
-  'function withdraw(address token, uint256 amount) external',
-  'function withdrawETH(uint256 amount) external',
+  // Views
+  'function allowedEOAs(address eoa) external view returns (bool)',
+  'function minAmountBitLength() external view returns (uint256)',
+
+  // State-changing — under the hood uses SwapRouter02 exactInput((bytes,address,uint256,uint256)) 0xb858183f
+  'function executeSwap(address tokenIn, uint256 amountIn, bytes calldata path, uint256 minAmountOut, uint256 deadline) external returns (uint256 amountOut)',
+  'function executeSwapWithCallback(address tokenIn, uint256 amountIn, bytes calldata path, uint256 minAmountOut, uint256 deadline, bytes calldata callbackData) external returns (uint256 amountOut)',
+  'function executeBatchSwaps(tuple(address tokenIn, uint256 amountIn, bytes path, uint256 minAmountOut)[] swaps, uint256 deadline) external returns (uint256[] amountsOut)',
+  'function allowEOA(address eoa) external',
+  'function revokeEOA(address eoa) external',
+  'function multicall(bytes[] calldata data) external returns (bytes[] memory results)',
 ];
 
 export const AAVE_V3_POOL_ABI = [
-  'function flashLoanSimple(address receiver, address token, uint256 amount, bytes calldata params, uint16 referralCode) external',
-  'function getReserveData(address asset) external view returns (tuple(uint256 configuration, uint128 liquidityIndex, uint128 variableBorrowIndex, uint128 currentLiquidityRate, uint128 currentVariableBorrowRate, uint128 currentStableBorrowRate, uint40 lastUpdateTimestamp, address aTokenAddress, address stableDebtTokenAddress, address variableDebtTokenAddress, address interestRateStrategyAddress, uint8 id) data)',
+  'function flashLoanSimple(address receiverAddress, address asset, uint256 amount, bytes calldata params, uint16 referralCode) external',
+  'function FLASHLOAN_PREMIUM_TOTAL() external view returns (uint128)',
+  'function getReserveData(address asset) external view returns (tuple(uint256 configuration, uint128 liquidityIndex, uint128 currentLiquidityRate, uint128 variableBorrowIndex, uint128 currentVariableBorrowRate, uint128 currentStableBorrowRate, uint40 lastUpdateTimestamp, uint16 id, address aTokenAddress, address stableDebtTokenAddress, address variableDebtTokenAddress, address interestRateStrategyAddress, uint128 accruedToTreasury, uint128 unbacked, uint128 isolationModeTotalDebt) data)',
 ];
 
+/** SwapRouter02 — exactInput has NO deadline field (use multicall(deadline, data) if needed). */
 export const UNISWAP_V3_ROUTER_ABI = [
-  'function exactInputSingle(tuple(bytes path, address recipient, uint256 deadline, uint256 amountIn, uint256 amountOutMinimum, uint160 sqrtPriceLimitX96) params) external payable returns (uint256 amountOut)',
-  'function exactInput(tuple(bytes path, address recipient, uint256 deadline, uint256 amountIn, uint256 amountOutMinimum) params) external payable returns (uint256 amountOut)',
-  'function exactOutputSingle(tuple(bytes path, address recipient, uint256 deadline, uint256 amountOut, uint256 amountInMaximum, uint160 sqrtPriceLimitX96) params) external payable returns (uint256 amountIn)',
+  'function exactInputSingle(tuple(address tokenIn, address tokenOut, uint24 fee, address recipient, uint256 amountIn, uint256 amountOutMinimum, uint160 sqrtPriceLimitX96) params) external payable returns (uint256 amountOut)',
+  'function exactInput(tuple(bytes path, address recipient, uint256 amountIn, uint256 amountOutMinimum) params) external payable returns (uint256 amountOut)',
+  'function exactOutputSingle(tuple(address tokenIn, address tokenOut, uint24 fee, address recipient, uint256 amountOut, uint256 amountInMaximum, uint160 sqrtPriceLimitX96) params) external payable returns (uint256 amountIn)',
   'function multicall(uint256 deadline, bytes[] data) external payable returns (bytes[] results)',
+  'function multicall(bytes[] data) external payable returns (bytes[] results)',
 ];
 
 // QuoterV2: richer return data (sqrtPriceX96After, initializedTicksCrossed, gasEstimate)

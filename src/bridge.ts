@@ -1,9 +1,9 @@
-import { BigNumber, ethers } from 'ethers';
+import { ethers } from 'ethers';
 import { SniperExecutor } from './executor';
 import { FlashLoanExecutor } from './flashExecutor';
 import { EIP7702Executor } from './eip7702';
 import { FlashSizer } from './flashSizer';
-import { signer } from './config';
+import { signer, provider } from './config';
 
 /**
  * Execution Mode Strategy
@@ -32,11 +32,11 @@ interface BridgeConfig {
 interface SwapOpportunity {
   tokenIn: string;
   tokenOut: string;
-  amountIn: BigNumber;
+  amountIn: bigint;
   path: Buffer;
-  minAmountOut: BigNumber;
+  minAmountOut: bigint;
   deadline: number;
-  estimatedProfit?: BigNumber;
+  estimatedProfit?: bigint;
   /** Optional DEX pool for Bitquery slippage/depth sizing */
   poolAddress?: string;
 }
@@ -45,9 +45,9 @@ interface BridgeExecutionResult {
   success: boolean;
   mode: ExecutionMode;
   txHash?: string;
-  amountOut?: BigNumber;
-  profit?: BigNumber;
-  gasUsed?: BigNumber;
+  amountOut?: bigint;
+  profit?: bigint;
+  gasUsed?: bigint;
   error?: string;
   fallbackAttempted?: boolean;
 }
@@ -86,7 +86,7 @@ export class ExecutionBridge {
   async executeOptimal(opportunity: SwapOpportunity): Promise<BridgeExecutionResult> {
     console.log(`\n🌉 Execution Bridge - Optimal Strategy`);
     console.log(`  Token in: ${opportunity.tokenIn}`);
-    console.log(`  Amount: ${ethers.utils.formatUnits(opportunity.amountIn, 18)}`);
+    console.log(`  Amount: ${ethers.formatUnits(opportunity.amountIn, 18)}`);
 
     // Analyze conditions to determine best mode
     const mode = await this.selectOptimalMode(opportunity);
@@ -231,11 +231,11 @@ export class ExecutionBridge {
       }
 
       console.log(`  ⚡ Flash loan execution via Aave V3 (dynamic size)`);
-      console.log(`     Loan amount:   ${ethers.utils.formatUnits(sized.amount, 18)}`);
-      console.log(`     Expected out:  ${ethers.utils.formatUnits(sized.expectedOutput, 18)}`);
-      console.log(`     Min amount out:${ethers.utils.formatUnits(sized.minAmountOut, 18)}`);
-      console.log(`     Aave fee:      ${ethers.utils.formatUnits(sized.fee, 18)}`);
-      console.log(`     Net profit:    ${ethers.utils.formatUnits(sized.netProfit, 18)}`);
+      console.log(`     Loan amount:   ${ethers.formatUnits(sized.amount, 18)}`);
+      console.log(`     Expected out:  ${ethers.formatUnits(sized.expectedOutput, 18)}`);
+      console.log(`     Min amount out:${ethers.formatUnits(sized.minAmountOut, 18)}`);
+      console.log(`     Aave fee:      ${ethers.formatUnits(sized.fee, 18)}`);
+      console.log(`     Net profit:    ${ethers.formatUnits(sized.netProfit, 18)}`);
       console.log(`     DEX:           ${sized.dexName}`);
 
       loanAmount = sized.amount;
@@ -309,10 +309,10 @@ export class ExecutionBridge {
     }
 
     // Auto-select based on conditions
-    const walletBalance = await signer.getBalance();
+    const walletBalance = await provider.getBalance(await signer.getAddress());
 
     // Check available capital
-    const hasCapital = walletBalance.gte(opportunity.amountIn);
+    const hasCapital = (walletBalance >= opportunity.amountIn);
 
     // Flash loan has no capital requirement, lowest cost
     if (this.shouldUseFlashLoan(opportunity)) {
@@ -341,7 +341,7 @@ export class ExecutionBridge {
     // - Zero capital situations
     // - Large swaps (amortize ~0.05% Aave fee)
     // - Multiple opportunities in sequence
-    return opportunity.amountIn.gt(BigNumber.from('1000000000000000000')); // > 1 token
+    return opportunity.amountIn > BigInt('1000000000000000000'); // > 1 token
   }
 
   /**
@@ -378,23 +378,23 @@ export class ExecutionBridge {
     directReady: boolean;
     flashLoanReady: boolean;
     eip7702Ready: boolean;
-    balance: BigNumber;
+    balance: bigint;
     eip7702Delegation?: string | null;
   }> {
-    const balance = await signer.getBalance();
+    const balance = await provider.getBalance(await signer.getAddress());
     let eip7702Ready = true;
     let eip7702Delegation: string | null = null;
     try {
       const status = await this.eip7702Executor.getStatus();
       eip7702Delegation = status.delegate;
       // Ready if we can sign type-4 (always, with a funded EOA) — designator optional.
-      eip7702Ready = balance.gt(0);
+      eip7702Ready = (balance > 0);
     } catch {
       eip7702Ready = false;
     }
 
     return {
-      directReady: balance.gt(0),
+      directReady: (balance > 0),
       flashLoanReady: true, // Always available (Aave)
       eip7702Ready,
       balance: balance,
@@ -445,23 +445,23 @@ export class BridgeStrategyAnalyzer {
   static analyzeOpportunity(opportunity: SwapOpportunity): {
     recommended: ExecutionMode;
     reasoning: string;
-    estimated: { gas: number; cost: BigNumber; time: number };
+    estimated: { gas: number; cost: bigint; time: number };
   } {
     // Direct: needs capital upfront
     const directGas = 150000;
     const directCost = opportunity.amountIn;
 
     // Flash loan: Aave V3 fee (Arbitrum live 5 bps / 0.05%; governance-updatable)
-    const flashFee = opportunity.amountIn.mul(5).div(10000);
+    const flashFee = opportunity.amountIn * 5n / 10000n;
 
     // Recommend based on cost efficiency
     let recommended = ExecutionMode.DIRECT;
     let reasoning = 'Default strategy';
 
-    if (opportunity.estimatedProfit?.lt(flashFee)) {
+    if ((opportunity.estimatedProfit ?? 0n) < flashFee) {
       recommended = ExecutionMode.EIP7702;
       reasoning = 'Profit too low for flash loan fee (~0.05%)';
-    } else if (opportunity.estimatedProfit && opportunity.estimatedProfit.gt(flashFee)) {
+    } else if (opportunity.estimatedProfit && (opportunity.estimatedProfit > flashFee)) {
       recommended = ExecutionMode.FLASH_LOAN;
       reasoning = 'Large profit justifies flash loan fee';
     }
@@ -482,19 +482,19 @@ export class BridgeStrategyAnalyzer {
    */
   static compareCosts(
     opportunity: SwapOpportunity,
-    gasPrice: BigNumber
+    gasPrice: bigint
   ): {
-    direct: BigNumber;
-    flashLoan: BigNumber;
-    eip7702: BigNumber;
+    direct: bigint;
+    flashLoan: bigint;
+    eip7702: bigint;
   } {
-    const directGas = BigNumber.from(150000);
-    const flashGas = BigNumber.from(500000);
-    const eip7702Gas = BigNumber.from(150000);
+    const directGas = BigInt(150000);
+    const flashGas = BigInt(500000);
+    const eip7702Gas = BigInt(150000);
 
-    const directCost = directGas.mul(gasPrice);
-    const flashCost = flashGas.mul(gasPrice).add(opportunity.amountIn.mul(5).div(10000)); // gas + fee
-    const eip7702Cost = eip7702Gas.mul(gasPrice);
+    const directCost = (directGas * gasPrice);
+    const flashCost = ((flashGas * gasPrice) + opportunity.amountIn * 5n / 10000n); // gas + fee
+    const eip7702Cost = (eip7702Gas * gasPrice);
 
     return {
       direct: directCost,

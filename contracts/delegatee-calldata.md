@@ -18,7 +18,7 @@ function executeSwap(
 
 **Calldata Structure:**
 ```
-Function Selector: 0x414bf389
+Function Selector: 0x107db2c4  // executeSwap(address,uint256,bytes,uint256,uint256)
 Parameter Encoding:
   tokenIn           (address)  - Input token address (EIP-55 checksummed)
   amountIn          (uint256)  - Amount of input tokens
@@ -101,7 +101,7 @@ Authorization Structure:
 ✅ **Atomic Execution**: All-or-nothing semantics via delegated call  
 ✅ **Signature Required**: EOA must sign authorization  
 ✅ **Revert Safe**: Failed swaps revert entire transaction  
-✅ **No Storage**: Delegatee is stateless, no persistent state  
+⚠️ **Has storage**: owner / allowedEOAs mapping (not fully stateless)  
 ✅ **Gas Efficient**: Inline execution, no DELEGATECALL overhead  
 
 ## Integration with EIP-7702
@@ -170,3 +170,36 @@ function decodeSwapCall(bytes calldata data)
 - **EIP-1559**: Dynamic fee market (Arbitrum integration)
 - **Uniswap V3**: SwapRouter02 interface (execution target)
 
+
+
+## Router wiring (production-critical)
+
+DelegatedExecutor and SniperSearcher call Uniswap V3 **SwapRouter02**:
+
+- `exactInput((bytes path, address recipient, uint256 amountIn, uint256 amountOutMinimum))`
+- selector: `0xb858183f`
+
+Do **not** use positional `exactInput(bytes,address,uint256,uint256)` (`0x11b69c46`) — wrong ABI.
+
+### Flash path wiring
+
+```
+EOA --type4--> BEBE.execute([CALL FlashLoanReceiver.initiateFlashLoan])
+  --> Aave.flashLoanSimple(receiver=Flash)
+  --> Flash.executeOperation
+      --> approve SniperSearcher
+      --> SniperSearcher.executeSwap  (must be allowExecutor'd at deploy)
+      --> path MUST round-trip to borrow asset
+      --> approve Aave for amount+premium
+```
+
+### Selector cheat-sheet
+
+| Function | Selector |
+|----------|----------|
+| SniperSearcher.executeSwap(address,uint256,bytes,uint256) | 0xdd824660 |
+| SniperSearcher.executeSwapWithDeadline(...,uint256) | (see ABI) |
+| FlashLoanReceiver.initiateFlashLoan(...) | 0xd4c4ca9b |
+| BEBE / ERC7821 execute(bytes32,bytes) | 0xe9ae5c53 |
+| SwapRouter02 exactInput(ExactInputParams) | 0xb858183f |
+| DelegatedExecutor.executeSwap(...,deadline) | 0x107db2c4 |

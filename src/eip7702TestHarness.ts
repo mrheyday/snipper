@@ -1,4 +1,4 @@
-import { BigNumber, ethers, Wallet } from 'ethers';
+import { ethers, Wallet } from 'ethers';
 import { Logger } from './logger';
 import PreFlightValidator from './preFlightValidator';
 
@@ -13,7 +13,7 @@ export interface TestResult {
   duration: number;
   error?: string;
   logs: string[];
-  gasUsed?: BigNumber;
+  gasUsed?: bigint;
   txHash?: string;
 }
 
@@ -22,13 +22,13 @@ export interface TestResult {
  * Comprehensive testing framework for delegated swap execution
  */
 export class EIP7702TestHarness {
-  private provider: ethers.providers.Provider;
+  private provider: ethers.Provider;
   private deployer: Wallet;
   private testResults: TestResult[] = [];
   private validator: PreFlightValidator;
 
   constructor(providerUrl: string, deployerKey: string) {
-    this.provider = new ethers.providers.JsonRpcProvider(providerUrl);
+    this.provider = new ethers.JsonRpcProvider(providerUrl);
     this.deployer = new Wallet(deployerKey, this.provider);
     this.validator = new PreFlightValidator(this.provider);
   }
@@ -67,16 +67,16 @@ export class EIP7702TestHarness {
     try {
       const balance = await this.provider.getBalance(this.deployer.address);
       test.logs.push(`Deployer: ${this.deployer.address}`);
-      test.logs.push(`Balance: ${ethers.utils.formatEther(balance)} ETH`);
+      test.logs.push(`Balance: ${ethers.formatEther(balance)} ETH`);
 
-      const minRequired = ethers.utils.parseEther('0.1');
-      test.passed = balance.gte(minRequired);
+      const minRequired = ethers.parseEther('0.1');
+      test.passed = (balance >= minRequired);
 
       if (test.passed) {
         test.logs.push(`✅ Balance sufficient for testing`);
       } else {
         test.logs.push(
-          `❌ Balance insufficient (need ${ethers.utils.formatEther(minRequired)} ETH)`
+          `❌ Balance insufficient (need ${ethers.formatEther(minRequired)} ETH)`
         );
       }
     } catch (error) {
@@ -108,7 +108,7 @@ export class EIP7702TestHarness {
       const block = await this.provider.getBlockNumber();
       test.logs.push(`Block: #${block}`);
 
-      test.passed = network.chainId === 42161; // Arbitrum One
+      test.passed = network.chainId === 42161n; // Arbitrum One
       if (test.passed) {
         test.logs.push(`✅ Connected to Arbitrum mainnet`);
       } else {
@@ -139,7 +139,7 @@ export class EIP7702TestHarness {
     try {
       const network = await this.provider.getNetwork();
       // EIP-7702 will be in Prague hardfork (expected Q1-Q2 2025)
-      const supports7702 = network.chainId === 42161 || network.name.includes('prague');
+      const supports7702 = network.chainId === 42161n || network.name.includes('prague');
 
       test.logs.push(`Network: ${network.name}`);
       test.logs.push(`EIP-7702 expected on Arbitrum: Q1-Q2 2025`);
@@ -177,11 +177,11 @@ export class EIP7702TestHarness {
       const delegatedExecutor = '0x3a61262D8BF646A13a1165350dcb0c1390c82a88';
       const delegatedEOA = this.deployer.address;
       const tokenIn = '0x2ffc54888e5a3b69dd7127aba8628d8f8ae42181'; // WETH on Arbitrum
-      const amountIn = ethers.utils.parseEther('0.001');
+      const amountIn = ethers.parseEther('0.001');
 
       test.logs.push(`Executor: ${delegatedExecutor}`);
       test.logs.push(`EOA: ${delegatedEOA}`);
-      test.logs.push(`Amount: ${ethers.utils.formatEther(amountIn)}`);
+      test.logs.push(`Amount: ${ethers.formatEther(amountIn)}`);
 
       // Validate preconditions
       const validationResult = await this.validator.validateDelegatedSwap({
@@ -232,7 +232,7 @@ export class EIP7702TestHarness {
       // Scenario 1: Insufficient balance
       test.logs.push('  1. Insufficient balance detection');
       const balance = await this.provider.getBalance(this.deployer.address);
-      const canDetect = balance.lt(ethers.utils.parseEther('1000000'));
+      const canDetect = balance < ethers.parseEther('1000000');
       test.logs.push(`     ✅ Can detect: ${canDetect}`);
 
       // Scenario 2: Expired deadline
@@ -276,7 +276,7 @@ export class EIP7702TestHarness {
         delegatedExecutor: '0x3a61262D8BF646A13a1165350dcb0c1390c82a88',
         delegatedEOA: this.deployer.address,
         tokenIn: '0x2ffc54888e5a3b69dd7127aba8628d8f8ae42181',
-        amountIn: ethers.utils.parseEther('0.001'),
+        amountIn: ethers.parseEther('0.001'),
         deadline: Math.floor(Date.now() / 1000) + 300,
       };
 

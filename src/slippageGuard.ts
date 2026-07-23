@@ -1,4 +1,4 @@
-import { BigNumber } from 'ethers';
+import { ethers } from 'ethers';
 
 /**
  * Slippage Guard Configuration
@@ -14,8 +14,8 @@ export interface SlippageConfig {
  * Slippage Analysis Result
  */
 export interface SlippageAnalysis {
-  expectedOutput: BigNumber;
-  minAmountOut: BigNumber;
+  expectedOutput: bigint;
+  minAmountOut: bigint;
   slippageBps: number; // in basis points
   priceImpactBps: number;
   isAcceptable: boolean;
@@ -28,8 +28,8 @@ export interface SlippageAnalysis {
  */
 export interface PriceSnapshot {
   timestamp: number;
-  price: BigNumber;
-  liquidity: BigNumber;
+  price: bigint;
+  liquidity: bigint;
 }
 
 /**
@@ -50,26 +50,26 @@ export class SlippageGuard {
    * Calculate minimum output with slippage protection
    */
   calculateMinimumOutput(
-    expectedOutput: BigNumber,
+    expectedOutput: bigint,
     slippageBps: number = this.config.maxSlippageBps
-  ): BigNumber {
-    const slippageAmount = expectedOutput.mul(slippageBps).div(10000);
-    return expectedOutput.sub(slippageAmount);
+  ): bigint {
+    const slippageAmount = expectedOutput * BigInt(slippageBps) / BigInt(10000);
+    return (expectedOutput - slippageAmount);
   }
 
   /**
    * Analyze slippage for a swap
    */
   analyzeSlippage(
-    amountIn: BigNumber,
-    expectedOutput: BigNumber,
-    priceQuote: BigNumber,
-    routerQuote: BigNumber
+    amountIn: bigint,
+    expectedOutput: bigint,
+    priceQuote: bigint,
+    routerQuote: bigint
   ): SlippageAnalysis {
     const warnings: string[] = [];
-    const slippageAmount = expectedOutput.sub(routerQuote);
-    const slippageBps = slippageAmount.mul(10000).div(expectedOutput);
-    const slippageNum = slippageBps.toNumber();
+    const slippageAmount = (expectedOutput - routerQuote);
+    const slippageBps = slippageAmount * BigInt(10000) / BigInt(expectedOutput);
+    const slippageNum = Number(slippageBps);
 
     const maxSlippageBps = this.emergencyMode
       ? this.config.emergencySlippageBps
@@ -78,9 +78,9 @@ export class SlippageGuard {
     const isAcceptable = slippageNum <= maxSlippageBps;
 
     // Check price impact
-    const priceImpactAmount = priceQuote.sub(routerQuote);
-    const priceImpactBps = priceImpactAmount.mul(10000).div(priceQuote);
-    const priceImpactNum = priceImpactBps.toNumber();
+    const priceImpactAmount = (priceQuote - routerQuote);
+    const priceImpactBps = priceImpactAmount * BigInt(10000) / BigInt(priceQuote);
+    const priceImpactNum = Number(priceImpactBps);
 
     if (priceImpactNum > this.config.maxPriceImpactBps) {
       warnings.push(
@@ -98,9 +98,9 @@ export class SlippageGuard {
     }
 
     // Check profit
-    const profit = routerQuote.sub(amountIn);
-    const profitBps = profit.mul(10000).div(amountIn);
-    const profitNum = profitBps.toNumber();
+    const profit = (routerQuote - amountIn);
+    const profitBps = profit * BigInt(10000) / BigInt(amountIn);
+    const profitNum = Number(profitBps);
 
     if (profitNum < this.config.minProfitBps) {
       warnings.push(
@@ -112,7 +112,9 @@ export class SlippageGuard {
 
     const minAmountOut = this.calculateMinimumOutput(expectedOutput);
     const safetyMargin =
-      (routerQuote.sub(minAmountOut).toNumber() / minAmountOut.toNumber()) * 100 || 0;
+      minAmountOut === 0n
+        ? 0
+        : Number(((routerQuote - minAmountOut) * 10000n) / minAmountOut) / 100;
 
     return {
       expectedOutput,
@@ -128,7 +130,7 @@ export class SlippageGuard {
   /**
    * Monitor price for sandwich attack detection
    */
-  recordPriceSnapshot(poolId: string, price: BigNumber, liquidity: BigNumber): void {
+  recordPriceSnapshot(poolId: string, price: bigint, liquidity: bigint): void {
     const snapshot: PriceSnapshot = {
       timestamp: Date.now(),
       price,
@@ -161,23 +163,23 @@ export class SlippageGuard {
     const oldest = recentSnapshots[0];
     const newest = recentSnapshots[recentSnapshots.length - 1];
 
-    const priceChange = newest.price.sub(oldest.price);
-    const priceChangeBps = priceChange.mul(10000).div(oldest.price).toNumber();
+    const priceChange = (newest.price - oldest.price);
+    const priceChangeBps = priceChange * BigInt(10000) / BigInt(Number(oldest.price));
 
     // Threshold in basis points (e.g., 200 = 2% sudden movement)
-    return Math.abs(priceChangeBps) > threshold;
+    return Math.abs(Number(priceChangeBps)) > threshold;
   }
 
   /**
    * Calculate safe swap amount to stay under max slippage
    */
   calculateSafeSwapAmount(
-    totalLiquidity: BigNumber,
+    totalLiquidity: bigint,
     maxSlippageBps: number = this.config.maxSlippageBps
-  ): BigNumber {
-    // Safe amount = liquidity * (maxSlippage / 10000) * 0.1
+  ): bigint {
+    // Safe amount = liquidity * (maxSlippage / 10000n) * 0.1
     // Conservative: 10% of what slippage would allow
-    const safeAmount = totalLiquidity.mul(maxSlippageBps).div(10000).div(10);
+    const safeAmount = totalLiquidity * BigInt(maxSlippageBps) / BigInt((10000) / 10);
     return safeAmount;
   }
 
@@ -185,16 +187,17 @@ export class SlippageGuard {
    * Validate swap parameters against slippage limits
    */
   validateSwap(
-    amountIn: BigNumber,
-    minAmountOut: BigNumber,
-    expectedOutput: BigNumber
+    amountIn: bigint,
+    minAmountOut: bigint,
+    expectedOutput: bigint
   ): {
     isValid: boolean;
     reason?: string;
     slippageBps: number;
   } {
-    const slippageAmount = expectedOutput.sub(minAmountOut);
-    const slippageBps = slippageAmount.mul(10000).div(expectedOutput).toNumber();
+    const slippageAmount = (expectedOutput - minAmountOut);
+    const slippageBpsBn = expectedOutput === 0n ? 0n : (slippageAmount * 10000n) / expectedOutput;
+    const slippageBps = Number(slippageBpsBn);
 
     const maxSlippageBps = this.emergencyMode
       ? this.config.emergencySlippageBps
@@ -203,15 +206,13 @@ export class SlippageGuard {
     if (slippageBps > maxSlippageBps) {
       return {
         isValid: false,
-        reason: `Slippage ${(slippageBps / 100).toFixed(2)}% exceeds max ${(
-          maxSlippageBps / 100
-        ).toFixed(2)}%`,
+        reason: `Slippage ${(slippageBps / 100).toFixed(2)}% exceeds max ${(maxSlippageBps / 100).toFixed(2)}%`,
         slippageBps,
       };
     }
 
-    const profit = minAmountOut.sub(amountIn);
-    if (profit.lte(0)) {
+    const profit = (minAmountOut - amountIn);
+    if ((profit <= 0)) {
       return {
         isValid: false,
         reason: 'No profit after slippage',
@@ -263,7 +264,7 @@ export class SlippageGuard {
   /**
    * Calculate average price over time window
    */
-  getAveragePrice(poolId: string, windowMs: number = 60000): BigNumber | null {
+  getAveragePrice(poolId: string, windowMs: number = 60000): bigint | null {
     const history = this.priceHistory.get(poolId);
     if (!history || history.length === 0) return null;
 
@@ -272,8 +273,8 @@ export class SlippageGuard {
 
     if (recentSnapshots.length === 0) return null;
 
-    const sum = recentSnapshots.reduce((acc, s) => acc.add(s.price), BigNumber.from(0));
-    return sum.div(recentSnapshots.length);
+    const sum = recentSnapshots.reduce((acc, s) => (acc + s.price), BigInt(0));
+    return sum / BigInt(recentSnapshots.length);
   }
 
   /**
@@ -288,7 +289,7 @@ export class SlippageGuard {
 
     if (recentSnapshots.length < 2) return 0;
 
-    const prices = recentSnapshots.map((s) => s.price.toNumber());
+    const prices = recentSnapshots.map((s) => Number(s.price));
     const avg = prices.reduce((a, b) => a + b, 0) / prices.length;
     const variance = prices.reduce((sum, p) => sum + Math.pow(p - avg, 2), 0) / prices.length;
     const stdDev = Math.sqrt(variance);

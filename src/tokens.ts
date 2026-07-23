@@ -1,7 +1,7 @@
 import { Token } from '@uniswap/sdk-core';
-import { Signer, BigNumber, BigNumberish, Contract, providers } from 'ethers';
+import { JsonRpcProvider, Signer, Contract, ethers } from 'ethers';
 import { CHAIN_ID } from './config';
-import { Provider } from '@ethersproject/providers';
+import type { Provider } from 'ethers';
 import { config as loadEnvironmentVariables } from 'dotenv';
 import { validateAndChecksumAddress } from './validation';
 import { Logger } from './logger';
@@ -28,7 +28,7 @@ const ERC20_ABI = [
 
 export type TokenWithContract = {
   contract: Contract;
-  walletHas: (signer: Signer, requiredAmount: BigNumberish) => Promise<boolean>;
+  walletHas: (signer: Signer, requiredAmount: bigint | string | number) => Promise<boolean>;
   token: Token;
 };
 
@@ -38,7 +38,11 @@ export const buildERC20TokenWithContract = async (
 ): Promise<TokenWithContract | null> => {
   try {
     const checksummedAddress = validateAndChecksumAddress(address);
-    const contract = new Contract(checksummedAddress, ERC20_ABI, provider);
+    const contract = new Contract(checksummedAddress, ERC20_ABI, provider) as Contract & {
+      name(): Promise<string>; symbol(): Promise<string>; decimals(): Promise<number>;
+      balanceOf(a: string): Promise<bigint>; allowance(o:string,s:string):Promise<bigint>;
+      approve(s:string,a:bigint):Promise<ethers.ContractTransactionResponse>;
+    };
     const [name, symbol, decimals] = await Promise.all([
       contract.name(),
       contract.symbol(),
@@ -51,10 +55,9 @@ export const buildERC20TokenWithContract = async (
     return {
       contract,
       walletHas: async (signer, requiredAmount) => {
-        const signerBalance = await contract
-          .connect(signer)
-          .balanceOf(await signer.getAddress());
-        return signerBalance.gte(BigNumber.from(requiredAmount));
+        const connected = contract.connect(signer) as typeof contract;
+        const signerBalance = await connected.balanceOf(await signer.getAddress());
+        return signerBalance >= BigInt(requiredAmount);
       },
       token: new Token(CHAIN_ID, checksummedAddress, decimals, symbol, name),
     };
@@ -69,7 +72,7 @@ export const buildERC20TokenWithContract = async (
   }
 };
 
-const provider = new providers.JsonRpcProvider(process.env.RPC);
+const provider = new JsonRpcProvider(process.env.RPC);
 
 export type Tokens = {
   Token0: TokenWithContract | null;

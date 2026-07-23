@@ -1,4 +1,4 @@
-import { BigNumber, ethers, Signer, providers } from 'ethers';
+import { ethers, Signer } from 'ethers';
 import { signer, provider } from './config';
 import { SNIPER_SEARCHER_ABI } from './abis';
 import { Logger } from './logger';
@@ -7,18 +7,18 @@ const logger = new Logger('SniperExecutor');
 
 interface SwapParams {
   tokenIn: string;
-  amountIn: BigNumber;
+  amountIn: bigint;
   path: Buffer;
-  minAmountOut: BigNumber;
+  minAmountOut: bigint;
   deadline?: number;
 }
 
 interface ExecutionResult {
   success: boolean;
   txHash?: string;
-  amountOut?: BigNumber;
+  amountOut?: bigint;
   error?: string;
-  gasUsed?: BigNumber;
+  gasUsed?: bigint;
   revertReason?: string;
 }
 
@@ -38,8 +38,8 @@ export class SniperExecutor {
     let txHash: string | undefined;
     try {
       logger.info('Executing swap via SniperSearcher');
-      logger.info(`Input: ${ethers.utils.formatUnits(params.amountIn, 18)}`);
-      logger.info(`Min output: ${ethers.utils.formatUnits(params.minAmountOut, 18)}`);
+      logger.info(`Input: ${ethers.formatUnits(params.amountIn, 18)}`);
+      logger.info(`Min output: ${ethers.formatUnits(params.minAmountOut, 18)}`);
 
       // Exact-amount approve only (never MaxUint256 — limits blast radius if key leaks)
       await this.ensureAllowance(params.tokenIn, params.amountIn);
@@ -64,8 +64,8 @@ export class SniperExecutor {
         params.minAmountOut,
         deadline,
         {
-          gasLimit: gasEstimate.mul(110).div(100), // 10% buffer
-          maxFeePerGas: await provider.getGasPrice().then((p) => p.mul(120).div(100)),
+          gasLimit: gasEstimate * 110n / 100n, // 10% buffer
+          maxFeePerGas: await provider.getFeeData().then((fd) => ((fd.gasPrice ?? 0n) * 120n) / 100n),
         }
       );
 
@@ -124,7 +124,7 @@ export class SniperExecutor {
     txHash: string,
     maxWaitMs: number,
     maxBlocks: number
-  ): Promise<providers.TransactionReceipt | null> {
+  ): Promise<ethers.TransactionReceipt | null> {
     const startTime = Date.now();
     const startBlock = await provider.getBlockNumber();
 
@@ -164,12 +164,12 @@ export class SniperExecutor {
       };
 
       try {
-        const result = await provider.call(txRequest, tx.blockNumber);
+        const result = await provider.call({ ...txRequest, blockTag: tx.blockNumber ?? undefined });
         if (result === '0x') return 'Unknown error';
 
         // Try to decode as Error(string)
         try {
-          const iface = new ethers.utils.Interface(['function Error(string) public pure']);
+          const iface = new ethers.Interface(['function Error(string) public pure']);
           const decoded = iface.decodeFunctionResult('Error', result);
           return decoded[0] as string;
         } catch {
@@ -186,7 +186,7 @@ export class SniperExecutor {
   /**
    * Ensure searcher can pull exactly `amount` of token (exact approve, not infinite).
    */
-  private async ensureAllowance(token: string, amount: BigNumber): Promise<void> {
+  private async ensureAllowance(token: string, amount: bigint): Promise<void> {
     const erc20 = new ethers.Contract(
       token,
       [
@@ -196,21 +196,21 @@ export class SniperExecutor {
       this.executorSigner
     );
     const ownerAddress = await this.executorSigner.getAddress();
-    const currentAllowance: BigNumber = await erc20.allowance(
+    const currentAllowance: bigint = await erc20.allowance(
       ownerAddress,
-      this.searcher.address
+      (this.searcher.target as string)
     );
-    if (currentAllowance.gte(amount)) return;
+    if ((currentAllowance >= amount)) return;
 
     // Reset to 0 first for non-standard ERC20s that require it, then set exact amount.
-    if (currentAllowance.gt(0)) {
-      const resetTx = await erc20.approve(this.searcher.address, 0);
+    if ((currentAllowance > 0)) {
+      const resetTx = await erc20.approve((this.searcher.target as string), 0);
       await resetTx.wait(1);
     }
     logger.info(
-      `Approving SniperSearcher (${this.searcher.address}) for exact ${amount.toString()} of ${token}...`
+      `Approving SniperSearcher (${(this.searcher.target as string)}) for exact ${amount.toString()} of ${token}...`
     );
-    const approveTx = await erc20.approve(this.searcher.address, amount);
+    const approveTx = await erc20.approve((this.searcher.target as string), amount);
     await approveTx.wait(1);
     logger.info('✓ Exact approval confirmed');
   }
@@ -238,7 +238,7 @@ export class SniperExecutor {
         params.minAmountOut,
         params.deadline,
         {
-          gasLimit: gasEstimate.mul(110).div(100),
+          gasLimit: gasEstimate * 110n / 100n,
         }
       );
 
@@ -272,13 +272,13 @@ export class SniperExecutor {
   /**
    * Withdraw tokens from searcher contract
    */
-  async withdraw(token: string, to: string, amount?: BigNumber): Promise<ExecutionResult> {
+  async withdraw(token: string, to: string, amount?: bigint): Promise<ExecutionResult> {
     try {
       console.log(`\n💸 Withdrawing from searcher...`);
 
       const withdrawAmount = amount || (await this.getBalance(token));
       console.log(`  Token: ${token}`);
-      console.log(`  Amount: ${ethers.utils.formatUnits(withdrawAmount, 18)}`);
+      console.log(`  Amount: ${ethers.formatUnits(withdrawAmount, 18)}`);
       console.log(`  To: ${to}`);
 
       const tx = await this.searcher.withdraw(token, to, withdrawAmount);
@@ -347,22 +347,22 @@ export class SniperExecutor {
   /**
    * Check balance of token in searcher
    */
-  async getBalance(token: string): Promise<BigNumber> {
+  async getBalance(token: string): Promise<bigint> {
     try {
       const balance = await this.searcher.getBalance(token);
-      return BigNumber.from(balance);
+      return BigInt(balance);
     } catch (error) {
       console.error('Failed to get balance:', error);
-      return BigNumber.from(0);
+      return BigInt(0);
     }
   }
 
   /**
    * Estimate gas for swap
    */
-  private async estimateSwapGas(params: SwapParams): Promise<BigNumber> {
+  private async estimateSwapGas(params: SwapParams): Promise<bigint> {
     try {
-      const gasEstimate = await this.searcher.estimateGas.executeSwap(
+      const gasEstimate = await this.searcher.executeSwap.estimateGas(
         params.tokenIn,
         params.amountIn,
         params.path,
@@ -384,9 +384,9 @@ export class SniperExecutor {
    */
   private async estimateSwapGasWithDeadline(
     params: SwapParams & { deadline: number }
-  ): Promise<BigNumber> {
+  ): Promise<bigint> {
     try {
-      const gasEstimate = await this.searcher.estimateGas.executeSwapWithDeadline(
+      const gasEstimate = await this.searcher.executeSwapWithDeadline.estimateGas(
         params.tokenIn,
         params.amountIn,
         params.path,
@@ -408,7 +408,7 @@ export class SniperExecutor {
    * Get searcher address
    */
   getSearcherAddress(): string {
-    return this.searcher.address;
+    return (this.searcher.target as string);
   }
 }
 

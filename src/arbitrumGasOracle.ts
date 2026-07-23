@@ -1,4 +1,4 @@
-import { BigNumber, ethers, Contract } from 'ethers';
+import { ethers, Contract } from 'ethers';
 import { provider } from './config';
 import { Logger } from './logger';
 
@@ -22,11 +22,11 @@ const ARBGAS_INFO_ABI = [
  * Arbitrum gas pricing information
  */
 interface ArbitrumGasPrices {
-  l1BaseFeeWei: BigNumber; // L1 base fee per byte
-  l2BaseFeeWei: BigNumber; // L2 base fee per gas
-  l2MinimumBaseFee: BigNumber; // Minimum L2 base fee
-  storageGasPricePerByte: BigNumber; // Storage gas price
-  calldataGasPerBytePosted: BigNumber; // Calldata gas cost
+  l1BaseFeeWei: bigint; // L1 base fee per byte
+  l2BaseFeeWei: bigint; // L2 base fee per gas
+  l2MinimumBaseFee: bigint; // Minimum L2 base fee
+  storageGasPricePerByte: bigint; // Storage gas price
+  calldataGasPerBytePosted: bigint; // Calldata gas cost
   timestamp: number;
 }
 
@@ -34,9 +34,9 @@ interface ArbitrumGasPrices {
  * Estimated L1 and L2 costs
  */
 interface EstimatedCosts {
-  l2GasCost: BigNumber; // Pure L2 execution cost
-  l1CalldataCost: BigNumber; // L1 calldata cost (portion of tx data posted to L1)
-  totalEstimatedCost: BigNumber; // L2 + L1 calldata
+  l2GasCost: bigint; // Pure L2 execution cost
+  l1CalldataCost: bigint; // L1 calldata cost (portion of tx data posted to L1)
+  totalEstimatedCost: bigint; // L2 + L1 calldata
   percentageL1: number; // Percentage of cost from L1
   percentageL2: number; // Percentage of cost from L2
 }
@@ -47,14 +47,16 @@ interface EstimatedCosts {
  */
 export class ArbitrumGasOracle {
   private arbGasInfo: Contract;
-  private l1Provider: ethers.providers.JsonRpcProvider;
+  private l2Provider: ethers.Provider;
+  private l1Provider: ethers.JsonRpcProvider;
 
-  constructor(arbitrumProvider: ethers.providers.Provider, l1RpcUrl?: string) {
+  constructor(arbitrumProvider: ethers.Provider, l1RpcUrl?: string) {
+    this.l2Provider = arbitrumProvider;
     this.arbGasInfo = new ethers.Contract(ARBGAS_INFO_ADDRESS, ARBGAS_INFO_ABI, arbitrumProvider);
 
     // Use provided L1 RPC or fall back to Ethereum mainnet
     const rpcUrl = l1RpcUrl || 'https://eth-mainnet.g.alchemy.com/v2/demo';
-    this.l1Provider = new ethers.providers.JsonRpcProvider(rpcUrl);
+    this.l1Provider = new ethers.JsonRpcProvider(rpcUrl);
 
     logger.info('Initialized ArbitrumGasOracle');
   }
@@ -68,7 +70,7 @@ export class ArbitrumGasOracle {
       const l1BaseFee = await this.arbGasInfo.getL1BaseFeeEstimate();
 
       // Get L2 base fee from Arbitrum
-      const l2BaseFee = await provider.getGasPrice();
+      const l2BaseFee = (await this.l2Provider.getFeeData()).gasPrice ?? 0n;
 
       // Get Arbitrum-specific prices
       const prices = await this.arbGasInfo.getPricesInWei();
@@ -83,10 +85,10 @@ export class ArbitrumGasOracle {
       ] = prices;
 
       logger.info(`Arbitrum gas prices:`);
-      logger.info(`  L1 base fee: ${ethers.utils.formatUnits(l1BaseFee, 'gwei')} gwei`);
-      logger.info(`  L2 base fee: ${ethers.utils.formatUnits(l2BaseFee, 'gwei')} gwei`);
-      logger.info(`  L2 per-tx gas: ${ethers.utils.formatUnits(perL2TxGas, 'gwei')} gwei`);
-      logger.info(`  L1 per-byte: ${ethers.utils.formatUnits(perL1GasByte, 'gwei')} gwei`);
+      logger.info(`  L1 base fee: ${ethers.formatUnits(l1BaseFee, 'gwei')} gwei`);
+      logger.info(`  L2 base fee: ${ethers.formatUnits(l2BaseFee, 'gwei')} gwei`);
+      logger.info(`  L2 per-tx gas: ${ethers.formatUnits(perL2TxGas, 'gwei')} gwei`);
+      logger.info(`  L1 per-byte: ${ethers.formatUnits(perL1GasByte, 'gwei')} gwei`);
 
       return {
         l1BaseFeeWei: l1BaseFee,
@@ -105,12 +107,13 @@ export class ArbitrumGasOracle {
   /**
    * Get L1 gas price (Ethereum base fee)
    */
-  async getL1GasPrice(): Promise<BigNumber> {
+  async getL1GasPrice(): Promise<bigint> {
     try {
       const block = await this.l1Provider.getBlock('latest');
-      const baseFee = block.baseFeePerGas || BigNumber.from('0');
+      if (!block) throw new Error('no L1 block');
+      const baseFee = block.baseFeePerGas ?? 0n;
 
-      logger.info(`L1 base fee: ${ethers.utils.formatUnits(baseFee, 'gwei')} gwei`);
+      logger.info(`L1 base fee: ${ethers.formatUnits(baseFee, 'gwei')} gwei`);
       return baseFee;
     } catch (error) {
       logger.error(`Failed to get L1 gas price: ${error}`);
@@ -124,28 +127,28 @@ export class ArbitrumGasOracle {
    */
   async estimateTransactionCost(
     txData: string, // Hex-encoded transaction data
-    gasLimit: BigNumber
+    gasLimit: bigint
   ): Promise<EstimatedCosts> {
     const prices = await this.getArbitrumGasPrices();
 
     // Estimate calldata cost (each byte of tx data posted to L1)
     // This is approximately 16 gas per non-zero byte, 4 gas per zero byte
     const calldataBytes = (txData.length - 2) / 2; // Convert hex to bytes
-    const calldataCost = BigNumber.from(calldataBytes).mul(prices.calldataGasPerBytePosted);
+    const calldataCost = (BigInt(calldataBytes) * prices.calldataGasPerBytePosted);
 
     // L2 execution cost
-    const l2Cost = gasLimit.mul(prices.l2BaseFeeWei);
+    const l2Cost = (gasLimit * prices.l2BaseFeeWei);
 
     // Total cost = L2 execution + L1 calldata
-    const totalCost = l2Cost.add(calldataCost);
+    const totalCost = (l2Cost + calldataCost);
 
-    const percentageL1 = totalCost.gt(0) ? Number(calldataCost.mul(10000).div(totalCost)) / 100 : 0;
+    const percentageL1 = (totalCost > 0) ? Number((calldataCost * 10000n) / totalCost) / 100 : 0;
     const percentageL2 = 100 - percentageL1;
 
     logger.info(`Transaction cost breakdown:`);
-    logger.info(`  L2 execution: ${ethers.utils.formatUnits(l2Cost, 'gwei')} gwei`);
-    logger.info(`  L1 calldata: ${ethers.utils.formatUnits(calldataCost, 'gwei')} gwei`);
-    logger.info(`  Total: ${ethers.utils.formatUnits(totalCost, 'gwei')} gwei`);
+    logger.info(`  L2 execution: ${ethers.formatUnits(l2Cost, 'gwei')} gwei`);
+    logger.info(`  L1 calldata: ${ethers.formatUnits(calldataCost, 'gwei')} gwei`);
+    logger.info(`  Total: ${ethers.formatUnits(totalCost, 'gwei')} gwei`);
     logger.info(`  L1%: ${percentageL1.toFixed(2)}%`);
     logger.info(`  L2%: ${percentageL2.toFixed(2)}%`);
 
@@ -163,31 +166,31 @@ export class ArbitrumGasOracle {
    */
   async compareWithL1(
     txData: string,
-    gasLimit: BigNumber
+    gasLimit: bigint
   ): Promise<{
-    l1Cost: BigNumber;
-    l2Cost: BigNumber;
-    savings: BigNumber;
+    l1Cost: bigint;
+    l2Cost: bigint;
+    savings: bigint;
     savingsPercent: number;
   }> {
     const l1GasPrice = await this.getL1GasPrice();
     const arbitrumCosts = await this.estimateTransactionCost(txData, gasLimit);
 
     // L1 would cost: gasLimit * L1 base fee
-    const l1Cost = gasLimit.mul(l1GasPrice);
+    const l1Cost = (gasLimit * l1GasPrice);
 
     // Arbitrum costs: L2 + L1 calldata
     const l2Cost = arbitrumCosts.totalEstimatedCost;
 
     // Calculate savings
-    const savings = l1Cost.sub(l2Cost);
-    const savingsPercent = l1Cost.gt(0) ? Number(savings.mul(10000).div(l1Cost)) / 100 : 0;
+    const savings = (l1Cost - l2Cost);
+    const savingsPercent = (l1Cost > 0) ? Number((savings * 10000n) / l1Cost) / 100 : 0;
 
     logger.info(`L1 vs L2 Comparison:`);
-    logger.info(`  L1 cost: ${ethers.utils.formatUnits(l1Cost, 'gwei')} gwei`);
-    logger.info(`  L2 cost: ${ethers.utils.formatUnits(l2Cost, 'gwei')} gwei`);
+    logger.info(`  L1 cost: ${ethers.formatUnits(l1Cost, 'gwei')} gwei`);
+    logger.info(`  L2 cost: ${ethers.formatUnits(l2Cost, 'gwei')} gwei`);
     logger.info(
-      `  Savings: ${ethers.utils.formatUnits(savings, 'gwei')} gwei (${savingsPercent.toFixed(2)}%)`
+      `  Savings: ${ethers.formatUnits(savings, 'gwei')} gwei (${savingsPercent.toFixed(2)}%)`
     );
 
     return {
@@ -204,9 +207,9 @@ export class ArbitrumGasOracle {
   async estimateModeCosts(): Promise<
     {
       mode: string;
-      estimatedGas: BigNumber;
+      estimatedGas: bigint;
       estimatedCalldataBytes: number;
-      totalCostEstimate: BigNumber;
+      totalCostEstimate: bigint;
     }[]
   > {
     const prices = await this.getArbitrumGasPrices();
@@ -215,30 +218,30 @@ export class ArbitrumGasOracle {
     const modes = [
       {
         mode: 'Direct',
-        estimatedGas: BigNumber.from('145000'),
+        estimatedGas: BigInt('145000'),
         calldataBytes: 260, // Typical swap calldata
       },
       {
         mode: 'FlashLoan',
-        estimatedGas: BigNumber.from('200000'),
+        estimatedGas: BigInt('200000'),
         calldataBytes: 320, // Larger due to callback
       },
       {
         mode: 'EIP-7702',
-        estimatedGas: BigNumber.from('105000'),
+        estimatedGas: BigInt('105000'),
         calldataBytes: 280, // Authorization + swap
       },
       {
         mode: 'ERC-4337',
-        estimatedGas: BigNumber.from('170000'),
+        estimatedGas: BigInt('170000'),
         calldataBytes: 480, // UserOp overhead
       },
     ];
 
     return modes.map(({ mode, estimatedGas, calldataBytes }) => {
-      const l2Cost = estimatedGas.mul(prices.l2BaseFeeWei);
-      const l1Cost = BigNumber.from(calldataBytes).mul(prices.calldataGasPerBytePosted);
-      const totalCost = l2Cost.add(l1Cost);
+      const l2Cost = (estimatedGas * prices.l2BaseFeeWei);
+      const l1Cost = (BigInt(calldataBytes) * prices.calldataGasPerBytePosted);
+      const totalCost = (l2Cost + l1Cost);
 
       return {
         mode,
@@ -253,19 +256,19 @@ export class ArbitrumGasOracle {
    * Get Arbitrum fee details for logging/monitoring
    */
   async getArbitrumFeeDetails(): Promise<{
-    l1Component: BigNumber; // What portion goes to L1
-    l2Component: BigNumber; // What portion goes to L2
+    l1Component: bigint; // What portion goes to L1
+    l2Component: bigint; // What portion goes to L2
     networkFeeAccount: string;
     feeMethod: string;
   }> {
     const prices = await this.getArbitrumGasPrices();
 
     // Typical swap transaction
-    const typicalGasLimit = BigNumber.from('145000');
+    const typicalGasLimit = BigInt('145000');
     const typicalCalldataBytes = 260;
 
-    const l2Component = typicalGasLimit.mul(prices.l2BaseFeeWei);
-    const l1Component = BigNumber.from(typicalCalldataBytes).mul(prices.calldataGasPerBytePosted);
+    const l2Component = (typicalGasLimit * prices.l2BaseFeeWei);
+    const l1Component = (BigInt(typicalCalldataBytes) * prices.calldataGasPerBytePosted);
 
     return {
       l1Component,
@@ -281,16 +284,16 @@ export class ArbitrumGasOracle {
   async recommendOptimalMode(): Promise<{
     mode: string;
     reason: string;
-    estimatedCost: BigNumber;
+    estimatedCost: bigint;
   }> {
     const modeCosts = await this.estimateModeCosts();
 
     // Find cheapest mode
     const cheapest = modeCosts.reduce((a, b) =>
-      a.totalCostEstimate.lt(b.totalCostEstimate) ? a : b
+      (a.totalCostEstimate < b.totalCostEstimate) ? a : b
     );
 
-    const reason = cheapest.totalCostEstimate.lt(BigNumber.from('10000000000000000000'))
+    const reason = cheapest.totalCostEstimate < BigInt('10000000000000000000')
       ? 'Low L1 calldata cost'
       : 'Optimized for L2 execution';
 
