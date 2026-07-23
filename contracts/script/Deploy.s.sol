@@ -58,10 +58,12 @@ contract Deploy is Script {
 
         vm.startBroadcast(deployerKey);
 
-        // 1. Deploy SniperSearcher(swapRouter, minAmountBitLength)
+        // 1. Deploy SniperSearcher(initialRouters[], minAmountBitLength)
         console.log("[1] Deploying SniperSearcher...");
         console.logBytes(DeployRegistry.sniperConstructorArgsEncoded());
-        SniperSearcher sniperSearcher = new SniperSearcher(swapRouter, minAmountBitLength);
+        address[] memory initialRouters = new address[](1);
+        initialRouters[0] = swapRouter;
+        SniperSearcher sniperSearcher = new SniperSearcher(initialRouters, minAmountBitLength);
         console.log("    [OK] SniperSearcher deployed to:", address(sniperSearcher));
 
         // 2. Deploy DelegatedExecutor(minAmountBitLength)

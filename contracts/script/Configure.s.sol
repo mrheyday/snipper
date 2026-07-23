@@ -44,10 +44,9 @@ contract Configure is Script {
 
         // --- Constructor / immutable audit ---
         console.log("[1] Constructor values (on-chain vs DeployRegistry)");
-        require(ss.swapRouter() == DeployRegistry.SWAP_ROUTER, "Sniper: swapRouter mismatch");
+        // swapRouter removed in favor of router allowlist
         require(ss.minAmountBitLength() == DeployRegistry.MIN_AMOUNT_BIT_LENGTH, "Sniper: minBits");
         require(ss.chainId() == block.chainid, "Sniper: chainId");
-        console.log("  SniperSearcher.swapRouter         =", ss.swapRouter());
         console.log("  SniperSearcher.minAmountBitLength =", ss.minAmountBitLength());
         console.log("  SniperSearcher.chainId            =", ss.chainId());
         console.log("  SniperSearcher.owner              =", ss.owner());

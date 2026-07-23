@@ -44,7 +44,9 @@ contract FlashLoanReceiverTest is Test {
         pool = address(this);
 
         router = new MockRouter02();
-        searcher = new SniperSearcher(address(router), 0);
+        address[] memory routers = new address[](1);
+        routers[0] = address(router);
+        searcher = new SniperSearcher(routers, 0);
         flash = new FlashLoanReceiver(address(searcher), pool);
 
         // Deploy must whitelist FlashLoanReceiver (matches Deploy.s.sol step 5)
@@ -91,7 +93,9 @@ contract FlashLoanReceiverTest is Test {
 
     function test_ExecuteOperation_RevertsWhenExecutorNotAllowed() public {
         // Fresh searcher without allowExecutor
-        SniperSearcher locked = new SniperSearcher(address(router), 0);
+        address[] memory routers = new address[](1);
+        routers[0] = address(router);
+        SniperSearcher locked = new SniperSearcher(routers, 0);
         FlashLoanReceiver orphan = new FlashLoanReceiver(address(locked), pool);
 
         uint256 amount = 100e18;

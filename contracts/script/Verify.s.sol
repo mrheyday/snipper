@@ -38,10 +38,10 @@ contract Verify is Script {
 
         address expectedPool = DeployRegistry.aavePoolForChain(block.chainid);
 
-        // --- SniperSearcher (constructor: swapRouter, minAmountBitLength) ---
+        // --- SniperSearcher (constructor: initialRouters[], minAmountBitLength) ---
         require(_isContract(sniperSearcher), "SniperSearcher: no code");
         SniperSearcher ss = SniperSearcher(payable(sniperSearcher));
-        require(ss.swapRouter() == DeployRegistry.SWAP_ROUTER, "SniperSearcher: bad swapRouter");
+        // swapRouter removed in favor of router allowlist
         require(
             ss.minAmountBitLength() == DeployRegistry.MIN_AMOUNT_BIT_LENGTH, "SniperSearcher: minBits"
         );
@@ -49,7 +49,6 @@ contract Verify is Script {
         require(ss.allowedExecutors(flashLoanReceiver), "SniperSearcher: Flash not allowedExecutor");
         console.log("[PASS] SniperSearcher wiring + constructor");
         console.log("       owner=", ss.owner());
-        console.log("       swapRouter=", ss.swapRouter());
         console.log("       minAmountBitLength=", ss.minAmountBitLength());
 
         // --- FlashLoanReceiver (constructor: swapExecutor, lendingPool) ---

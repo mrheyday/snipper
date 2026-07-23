@@ -27,7 +27,9 @@ contract AuditTest is Test {
 
         // Deploy contracts
         vm.prank(owner);
-        searcher = new SniperSearcher(address(this), 0);
+        address[] memory routers = new address[](1);
+        routers[0] = address(this);
+        searcher = new SniperSearcher(routers, 0);
         flashReceiver = new FlashLoanReceiver(address(searcher), address(this));
         executor = new DelegatedExecutor(0);
 
