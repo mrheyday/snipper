@@ -101,7 +101,7 @@ contract Deploy is Script {
         //    if the CREATE2 address has no code on this chain.
         address basicEoaBatchExecutor = CANONICAL_BEBE;
         if (CANONICAL_BEBE.code.length == 0) {
-            console.log("[4] Canonical BEBE missing — deploying local BasicEOABatchExecutor...");
+            console.log("[4] Canonical BEBE missing - deploying local BasicEOABatchExecutor...");
             basicEoaBatchExecutor = address(new BasicEOABatchExecutor());
             console.log("    [OK] BasicEOABatchExecutor deployed to:", basicEoaBatchExecutor);
         } else {
