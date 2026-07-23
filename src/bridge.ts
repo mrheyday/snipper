@@ -3,7 +3,7 @@ import { SniperExecutor } from './executor';
 import { FlashLoanExecutor } from './flashExecutor';
 import { EIP7702Executor } from './eip7702';
 import { FlashSizer } from './flashSizer';
-import { signer, provider } from './config';
+import { signer, provider, FLASH_USE_TYPE4 } from './config';
 
 /**
  * Execution Mode Strategy
@@ -249,6 +249,7 @@ export class ExecutionBridge {
       amount: loanAmount,
       swapPath: opportunity.path,
       minAmountOut: loanMinAmountOut,
+      useType4: FLASH_USE_TYPE4,
     });
 
     if (!result.success) {
@@ -257,6 +258,21 @@ export class ExecutionBridge {
         mode: ExecutionMode.FLASH_LOAN,
         error: result.error,
       };
+    }
+
+    // Pull profit to the bot EOA promptly (standing inventory on receiver is griefable).
+    if (result.profit && result.profit > 0n) {
+      try {
+        const to = await signer.getAddress();
+        await this.flashExecutor.withdraw(opportunity.tokenIn, to, 0n);
+        console.log(`  💰 Withdrew flash profit to ${to}`);
+      } catch (e) {
+        console.warn(
+          `  ⚠ Profit withdraw failed (funds remain on receiver): ${
+            e instanceof Error ? e.message : String(e)
+          }`
+        );
+      }
     }
 
     return {
@@ -308,11 +324,19 @@ export class ExecutionBridge {
       return this.config.preferredMode;
     }
 
-    // Auto-select based on conditions
-    const walletBalance = await provider.getBalance(await signer.getAddress());
-
-    // Check available capital
-    const hasCapital = (walletBalance >= opportunity.amountIn);
+    // Compare tokenIn balance (not ETH) for DIRECT vs capital-free modes.
+    let tokenBalance = 0n;
+    try {
+      const erc20 = new ethers.Contract(
+        opportunity.tokenIn,
+        ['function balanceOf(address) view returns (uint256)'],
+        provider
+      );
+      tokenBalance = BigInt(await erc20.balanceOf(await signer.getAddress()));
+    } catch {
+      tokenBalance = 0n;
+    }
+    const hasCapital = tokenBalance >= opportunity.amountIn;
 
     // Flash loan has no capital requirement, lowest cost
     if (this.shouldUseFlashLoan(opportunity)) {

@@ -30,6 +30,9 @@ contract Deploy is Script {
     address constant AAVE_POOL_ARBITRUM = 0x794a61358D6845594F94dc1DB02A252b5b4814aD;
     address constant AAVE_POOL_SEPOLIA = 0xB9C5a95a8f8D7ad8E64d64eF53e6aBaA40a5bF18;
 
+    /// @dev Vectorized BEBE CREATE2 — prefer over redeploying a local copy.
+    address constant CANONICAL_BEBE = 0x00000000BEBEDB7C30ee418158e26E31a5A8f3E2;
+
     struct DeploymentAddresses {
         address sniperSearcher;
         address flashLoanReceiver;
@@ -55,9 +58,18 @@ contract Deploy is Script {
         console.log("  Deployer:", deployer);
         console.log("  SwapRouter:", SWAP_ROUTER);
 
-        // Select Aave pool based on chain
-        address aavePool = block.chainid == 42161 ? AAVE_POOL_ARBITRUM : AAVE_POOL_SEPOLIA;
+        // Only Arbitrum One and Arbitrum Sepolia — never silently map unknown chains
+        // to a Sepolia Aave pool (would brick mainnet-like forks / other L2s).
+        address aavePool;
+        if (block.chainid == 42161) {
+            aavePool = AAVE_POOL_ARBITRUM;
+        } else if (block.chainid == 421614) {
+            aavePool = AAVE_POOL_SEPOLIA;
+        } else {
+            revert("unsupported chainId: only 42161 (Arb One) or 421614 (Arb Sepolia)");
+        }
         console.log("  Aave Pool:", aavePool);
+        console.log("  Canonical BEBE:", CANONICAL_BEBE);
         console.log("");
 
         // Start deployment
@@ -66,11 +78,9 @@ contract Deploy is Script {
 
         vm.startBroadcast(deployerKey);
 
-        // Dust guard: reject amountIn with bitLength < 50 (~5.6e14 wei floor). Our
-        // configured 0.001 KERN swap amount has bitLength exactly 50, so it still passes
-        // (check is strict <) while genuinely smaller dust gets rejected before any
-        // transferFrom/approve/router call.
-        uint256 minAmountBitLength = 50;
+        // Dust filter disabled (0): a global bit-length rejects normal USDC/USDT sizes
+        // (6 decimals). Enforce dust off-chain per token decimals instead.
+        uint256 minAmountBitLength = 0;
 
         // 1. Deploy SniperSearcher
         console.log("[1] Deploying SniperSearcher...");
@@ -87,12 +97,16 @@ contract Deploy is Script {
         FlashLoanReceiver flashLoanReceiver = new FlashLoanReceiver(address(sniperSearcher), aavePool);
         console.log("    [OK] FlashLoanReceiver deployed to:", address(flashLoanReceiver));
 
-        // 4. Deploy BasicEOABatchExecutor (BEBE) — multi-target CALL batching for EIP-7702.
-        //    When an EOA delegates here, `execute(mode, executionData)` can CALL any
-        //    `(to, value, data)` list (router, Aave, tokens, etc.) under the EOA context.
-        console.log("[4] Deploying BasicEOABatchExecutor (multi-target)...");
-        BasicEOABatchExecutor basicEoaBatchExecutor = new BasicEOABatchExecutor();
-        console.log("    [OK] BasicEOABatchExecutor deployed to:", address(basicEoaBatchExecutor));
+        // 4. Prefer Vectorized canonical BEBE when present; only deploy a local copy
+        //    if the CREATE2 address has no code on this chain.
+        address basicEoaBatchExecutor = CANONICAL_BEBE;
+        if (CANONICAL_BEBE.code.length == 0) {
+            console.log("[4] Canonical BEBE missing — deploying local BasicEOABatchExecutor...");
+            basicEoaBatchExecutor = address(new BasicEOABatchExecutor());
+            console.log("    [OK] BasicEOABatchExecutor deployed to:", basicEoaBatchExecutor);
+        } else {
+            console.log("[4] Using canonical BEBE (skip deploy):", CANONICAL_BEBE);
+        }
 
         // 5. Whitelist FlashLoanReceiver on SniperSearcher so executeOperation can call
         //    executeSwap (onlyOwnerOrAllowedExecutor). Without this, flash callbacks revert
@@ -113,11 +127,12 @@ contract Deploy is Script {
         console.log("  SniperSearcher:         ", address(sniperSearcher));
         console.log("  FlashLoanReceiver:      ", address(flashLoanReceiver));
         console.log("  DelegatedExecutor:      ", address(delegatedExecutor));
-        console.log("  BasicEOABatchExecutor:  ", address(basicEoaBatchExecutor));
+        console.log("  BasicEOABatchExecutor:  ", basicEoaBatchExecutor);
         console.log("");
         console.log("Configuration:");
         console.log("  SwapRouter:             ", SWAP_ROUTER);
         console.log("  AavePool:               ", aavePool);
+        console.log("  minAmountBitLength:     ", minAmountBitLength);
         console.log("  Owner:                  ", deployer);
         console.log("");
         console.log("EIP-7702 roles:");
@@ -134,9 +149,9 @@ contract Deploy is Script {
         console.log("  2. Update SNIPER_SEARCHER_ADDRESS=", address(sniperSearcher));
         console.log("  3. Update FLASH_LOAN_RECEIVER_ADDRESS=", address(flashLoanReceiver));
         console.log("  4. Update DELEGATED_EXECUTOR_ADDRESS=", address(delegatedExecutor));
-        console.log("  5. Update BATCH_EXECUTOR_ADDRESS=", address(basicEoaBatchExecutor));
+        console.log("  5. Update BATCH_EXECUTOR_ADDRESS=", basicEoaBatchExecutor);
         console.log("  6. On already-deployed stacks: cast send $SNIPER allowExecutor(address) $FLASH");
-        console.log("  7. Run integration tests with deployed contracts");
+        console.log("  7. Run forge script script/Verify.s.sol --rpc-url arbitrum");
         console.log("  8. Monitor initial transactions carefully");
         console.log("");
 
@@ -146,7 +161,7 @@ contract Deploy is Script {
                 sniperSearcher: address(sniperSearcher),
                 flashLoanReceiver: address(flashLoanReceiver),
                 delegatedExecutor: address(delegatedExecutor),
-                basicEoaBatchExecutor: address(basicEoaBatchExecutor),
+                basicEoaBatchExecutor: basicEoaBatchExecutor,
                 swapRouter: SWAP_ROUTER,
                 aavePool: aavePool
             })

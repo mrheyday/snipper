@@ -64,13 +64,24 @@ export const ARBITRUM_DEX_PROTOCOLS: DEXProtocolConfig[] = [
   },
 ];
 
+/** Protocols whose router is wired into SniperSearcher / SwapRouter02 execution. */
+export const EXECUTION_VENUE_PROTOCOLS: DEXProtocolConfig[] = ARBITRUM_DEX_PROTOCOLS.filter(
+  (p) => p.name === 'Uniswap V3'
+);
+
 export class DEXAggregator {
   private provider: Provider;
   private protocols: DEXProtocolConfig[];
 
+  /**
+   * @param customProtocols Override protocol list. Production flash/direct path
+   *   must use Uniswap V3 only (SniperSearcher is hard-wired to SwapRouter02).
+   *   Pass full ARBITRUM_DEX_PROTOCOLS only for discovery/research tools.
+   */
   constructor(provider: Provider, customProtocols?: DEXProtocolConfig[]) {
     this.provider = provider;
-    this.protocols = customProtocols || ARBITRUM_DEX_PROTOCOLS;
+    // Default to Uniswap-only so size and execution share the same venue.
+    this.protocols = customProtocols || EXECUTION_VENUE_PROTOCOLS;
   }
 
   /**

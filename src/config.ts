@@ -56,8 +56,23 @@ const BATCH_EXECUTOR_ADDRESS = BATCH_EXECUTOR_ADDRESS_RAW
 export const CHAIN_ID = parseInt(getOptionalEnv('CHAIN_ID', '42161'));
 
 const DEADLINE_MINUTES = parseInt(getOptionalEnv('DEADLINE_IN_MINUTES', '30'));
-export const DEADLINE = Math.floor(Date.now() / 1000 + DEADLINE_MINUTES * 60);
-validateDeadline(DEADLINE);
+
+/**
+ * Fresh per-tx deadline (seconds since epoch). Do not cache at module load —
+ * long-running bots would send expired deadlines.
+ */
+export function getDeadline(minutes: number = DEADLINE_MINUTES): number {
+  const deadline = Math.floor(Date.now() / 1000 + minutes * 60);
+  validateDeadline(deadline);
+  return deadline;
+}
+
+/** @deprecated Prefer getDeadline() per transaction — this freezes at import. */
+export const DEADLINE = getDeadline();
+
+/** Prefer BEBE type-4 flash initiation when signer is a Wallet and owner matches. */
+export const FLASH_USE_TYPE4 =
+  getOptionalEnv('FLASH_USE_TYPE4', 'false').toLowerCase() === 'true';
 
 const SLIPPAGE_BPS = parseInt(getOptionalEnv('SLIPPAGE_TOLERANCE', '50'));
 validateSlippage(SLIPPAGE_BPS);

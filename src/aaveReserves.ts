@@ -83,9 +83,12 @@ export async function getReserveEligibility(
     }
     return { eligible: true, liquidity };
   } catch (e) {
+    // Fail closed: RPC/decode errors must not mark a reserve flashable.
     return {
-      eligible: true,
-      reason: e instanceof Error ? e.message : String(e),
+      eligible: false,
+      reason: `Reserve eligibility check failed: ${
+        e instanceof Error ? e.message : String(e)
+      }`,
     };
   }
 }

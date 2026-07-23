@@ -1,78 +1,22 @@
 /**
- * Complete smart contract ABI definitions
- * Extracted from contract compilation artifacts
+ * Human-readable ABI fragments for tooling.
+ * Canonical full JSON ABIs live in `./contractABIs` (from Foundry artifacts).
+ * Prefer importing from contractABIs for production contract instances.
  */
+export {
+  SNIPER_SEARCHER_ABI,
+  FLASH_LOAN_RECEIVER_ABI,
+  DELEGATED_EXECUTOR_ABI,
+  BEBE_BASIC_EOA_BATCH_EXECUTOR_ABI,
+  CONTRACT_ABIS,
+} from './contractABIs';
 
-export const SNIPER_SEARCHER_ABI = [
-  // Events
-  'event Swap(address indexed tokenIn, address indexed tokenOut, uint256 amountIn, uint256 amountOut)',
-  'event Withdrawn(address indexed token, address indexed to, uint256 amount)',
-  'event OwnershipTransferred(address indexed previousOwner, address indexed newOwner)',
-  'event ExecutorAllowed(address indexed executor)',
-  'event ExecutorRevoked(address indexed executor)',
-
-  // View functions
-  'function getBalance(address token) external view returns (uint256)',
-  'function owner() external view returns (address)',
-  'function swapRouter() external view returns (address)',
-  'function allowedExecutors(address executor) external view returns (bool)',
-  'function minAmountBitLength() external view returns (uint256)',
-
-  // State-changing functions
-  'function executeSwap(address tokenIn, uint256 amountIn, bytes calldata path, uint256 minAmountOut) external returns (uint256 amountOut)',
-  'function executeSwapWithDeadline(address tokenIn, uint256 amountIn, bytes calldata path, uint256 minAmountOut, uint256 deadline) external returns (uint256 amountOut)',
-  'function allowExecutor(address executor) external',
-  'function revokeExecutor(address executor) external',
-  'function transferOwnership(address newOwner) external',
-  'function withdraw(address token, address to, uint256 amount) external',
-  'function withdrawAll(address[] calldata tokens, address to) external',
-  'function withdrawETH(address payable to, uint256 amount) external',
-  'function emergencyWithdrawToken(address token, address to) external',
-  'function emergencyWithdrawETH(address payable to) external',
-];
-
-export const FLASH_LOAN_RECEIVER_ABI = [
-  // Events
-  'event FlashLoanExecuted(address indexed initiator, address indexed token, uint256 amount, uint256 fee)',
-  'event ExecutionFailed(string reason)',
-
-  // View functions
-  'function POOL() external view returns (address)',
-  'function owner() external view returns (address)',
-
-  // State-changing functions (called by Aave flash loan)
-  'function executeOperation(address asset, uint256 amount, uint256 premium, address initiator, bytes calldata params) external returns (bool)',
-  'function withdraw(address token, address to, uint256 amount) external',
-  'function withdrawETH(address payable to) external',
-];
-
-export const DELEGATED_EXECUTOR_ABI = [
-  // Events
-  'event SwapExecutedViaDelegate(address indexed caller, address indexed tokenIn, address indexed tokenOut, uint256 amountIn, uint256 amountOut)',
-  'event BatchSwapsExecuted(uint256 count)',
-
-  // View functions
-  'function owner() external view returns (address)',
-  'function balance(address token) external view returns (uint256)',
-
-  // Views
-  'function allowedEOAs(address eoa) external view returns (bool)',
-  'function minAmountBitLength() external view returns (uint256)',
-
-  // State-changing — under the hood uses SwapRouter02 exactInput((bytes,address,uint256,uint256)) 0xb858183f
-  'function executeSwap(address tokenIn, uint256 amountIn, bytes calldata path, uint256 minAmountOut, uint256 deadline) external returns (uint256 amountOut)',
-  'function executeSwapWithCallback(address tokenIn, uint256 amountIn, bytes calldata path, uint256 minAmountOut, uint256 deadline, bytes calldata callbackData) external returns (uint256 amountOut)',
-  'function executeBatchSwaps(tuple(address tokenIn, uint256 amountIn, bytes path, uint256 minAmountOut)[] swaps, uint256 deadline) external returns (uint256[] amountsOut)',
-  'function allowEOA(address eoa) external',
-  'function revokeEOA(address eoa) external',
-  'function multicall(bytes[] calldata data) external returns (bytes[] memory results)',
-];
-
+/** Aave V3 Pool (minimal). */
 export const AAVE_V3_POOL_ABI = [
   'function flashLoanSimple(address receiverAddress, address asset, uint256 amount, bytes calldata params, uint16 referralCode) external',
   'function FLASHLOAN_PREMIUM_TOTAL() external view returns (uint128)',
   'function getReserveData(address asset) external view returns (tuple(uint256 configuration, uint128 liquidityIndex, uint128 currentLiquidityRate, uint128 variableBorrowIndex, uint128 currentVariableBorrowRate, uint128 currentStableBorrowRate, uint40 lastUpdateTimestamp, uint16 id, address aTokenAddress, address stableDebtTokenAddress, address variableDebtTokenAddress, address interestRateStrategyAddress, uint128 accruedToTreasury, uint128 unbacked, uint128 isolationModeTotalDebt) data)',
-];
+] as const;
 
 /** SwapRouter02 — exactInput has NO deadline field (use multicall(deadline, data) if needed). */
 export const UNISWAP_V3_ROUTER_ABI = [
@@ -81,49 +25,31 @@ export const UNISWAP_V3_ROUTER_ABI = [
   'function exactOutputSingle(tuple(address tokenIn, address tokenOut, uint24 fee, address recipient, uint256 amountOut, uint256 amountInMaximum, uint160 sqrtPriceLimitX96) params) external payable returns (uint256 amountIn)',
   'function multicall(uint256 deadline, bytes[] data) external payable returns (bytes[] results)',
   'function multicall(bytes[] data) external payable returns (bytes[] results)',
-];
+] as const;
 
-// QuoterV2: richer return data (sqrtPriceX96After, initializedTicksCrossed, gasEstimate)
-// vs V1's single uint256. Struct-based params, not positional.
+/** QuoterV2: richer return data vs V1. */
 export const UNISWAP_V3_QUOTER_ABI = [
   'function quoteExactInputSingle(tuple(address tokenIn, address tokenOut, uint256 amountIn, uint24 fee, uint160 sqrtPriceLimitX96) params) external returns (uint256 amountOut, uint160 sqrtPriceX96After, uint32 initializedTicksCrossed, uint256 gasEstimate)',
   'function quoteExactInput(bytes memory path, uint256 amountIn) external returns (uint256 amountOut, uint160[] memory sqrtPriceX96AfterList, uint32[] memory initializedTicksCrossedList, uint256 gasEstimate)',
-];
+] as const;
 
 export const ERC20_ABI = [
-  // Events
   'event Transfer(address indexed from, address indexed to, uint256 value)',
   'event Approval(address indexed owner, address indexed spender, uint256 value)',
-
-  // View functions
   'function name() external view returns (string)',
   'function symbol() external view returns (string)',
   'function decimals() external view returns (uint8)',
   'function totalSupply() external view returns (uint256)',
   'function balanceOf(address account) external view returns (uint256)',
-  'function allowance(address owner, address spender) external view returns (uint256)',
-
-  // State-changing functions
-  'function approve(address spender, uint256 amount) external returns (bool)',
   'function transfer(address to, uint256 amount) external returns (bool)',
+  'function allowance(address owner, address spender) external view returns (uint256)',
+  'function approve(address spender, uint256 amount) external returns (bool)',
   'function transferFrom(address from, address to, uint256 amount) external returns (bool)',
-];
+] as const;
 
+/** Correct Uniswap Permit2 surface (spender required on approve). */
 export const PERMIT2_ABI = [
-  // Permit2 for gas-efficient approvals
-  'function permit(address owner, tuple(address token, uint160 amount, uint48 expiration, uint48 nonce) permitted, bytes calldata signature) external',
-  'function permitTransferFrom(tuple(address from, address to, uint160 amount) transferDetails, tuple(address token, uint160 amount, uint48 expiration, uint48 nonce) permitted, bytes calldata signature) external',
-  'function transferFrom(address from, address to, uint160 amount, address token) external',
-  'function allowance(address owner, address token, address spender) external view returns (uint160 amount, uint48 expiration, uint48 nonce)',
-];
-
-export default {
-  SNIPER_SEARCHER_ABI,
-  FLASH_LOAN_RECEIVER_ABI,
-  DELEGATED_EXECUTOR_ABI,
-  AAVE_V3_POOL_ABI,
-  UNISWAP_V3_ROUTER_ABI,
-  UNISWAP_V3_QUOTER_ABI,
-  ERC20_ABI,
-  PERMIT2_ABI,
-};
+  'function approve(address token, address spender, uint160 amount, uint48 expiration) external',
+  'function allowance(address owner, address token, address spender) view returns (uint160 amount, uint48 expiration, uint48 nonce)',
+  'function permit(address owner, ((address token, uint160 amount, uint48 expiration, uint48 nonce) details, address spender, uint256 sigDeadline) permitSingle, bytes signature) external',
+] as const;

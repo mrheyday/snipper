@@ -1,5 +1,6 @@
 import { ethers, Wallet } from 'ethers';
 import { provider, signer, CHAIN_ID } from './config';
+import { getEip1559Fees } from './fees';
 import { Logger } from './logger';
 import { validateAndChecksumAddress } from './validation';
 
@@ -431,15 +432,36 @@ export class EIP7702Executor {
   }
 
   private async feeHints(): Promise<{ tip: bigint; maxFee: bigint }> {
-    const fee = await provider.getFeeData();
-    const tip = fee.maxPriorityFeePerGas ?? ethers.parseUnits('0.01', 'gwei');
-    const maxFee = fee.maxFeePerGas ?? (((await provider.getFeeData()).gasPrice ?? 0n) * 2n);
-    return { tip, maxFee: (maxFee > tip) ? maxFee : (tip * 2n) };
+    const f = await getEip1559Fees();
+    return { tip: f.maxPriorityFeePerGas, maxFee: f.maxFeePerGas };
   }
 
   private pathToHex(path: Buffer | string): string {
     if (typeof path === 'string') return path;
     return bufToHex(Buffer.isBuffer(path) ? path : Buffer.from(path));
+  }
+
+  /**
+   * After a type-4 send, require active delegation to the expected contract.
+   * EIP-7702 skips invalid auths without reverting — status=1 alone is insufficient.
+   */
+  private async assertDelegated(
+    eoa: string,
+    expected: string,
+    receipt: ethers.TransactionReceipt
+  ): Promise<string | null> {
+    const after = await getDelegationStatus(eoa);
+    if (!after.isDelegated || !after.delegate) {
+      return 'type-4 auth did not set delegation (auth may have been skipped)';
+    }
+    if (after.delegate.toLowerCase() !== expected.toLowerCase()) {
+      return `delegated to ${after.delegate}, expected ${expected}`;
+    }
+    // Gas used of a pure no-op self-call is tiny; real executeSwap/batch is higher.
+    if (receipt.gasUsed < 25_000n) {
+      return `type-4 gasUsed too low (${receipt.gasUsed}) — likely empty CALL / no-op`;
+    }
+    return null;
   }
 
   /**
@@ -502,11 +524,19 @@ export class EIP7702Executor {
         };
       }
 
+      const postErr = await this.assertDelegated(eoa, this.delegatedExecutor, receipt);
+      if (postErr) {
+        return {
+          success: false,
+          error: postErr,
+          txHash: sent.hash,
+          gasUsed: receipt.gasUsed,
+          authorization: auth,
+        };
+      }
+
       const after = await getDelegationStatus(eoa);
-      logger.info(
-        '  delegated code now: ' +
-          (after.isDelegated ? String(after.delegate) : after.code.slice(0, 24))
-      );
+      logger.info('  delegated code now: ' + String(after.delegate));
 
       if (params.clearAfter) {
         await this.clearDelegation();
@@ -739,10 +769,8 @@ export class BatchEOAExecutor {
   }
 
   private async feeHints(): Promise<{ tip: bigint; maxFee: bigint }> {
-    const fee = await provider.getFeeData();
-    const tip = fee.maxPriorityFeePerGas ?? ethers.parseUnits('0.01', 'gwei');
-    const maxFee = fee.maxFeePerGas ?? (((await provider.getFeeData()).gasPrice ?? 0n) * 2n);
-    return { tip, maxFee: (maxFee > tip) ? maxFee : (tip * 2n) };
+    const f = await getEip1559Fees();
+    return { tip: f.maxPriorityFeePerGas, maxFee: f.maxFeePerGas };
   }
 
   /**
@@ -803,10 +831,30 @@ export class BatchEOAExecutor {
       }
 
       const after = await getDelegationStatus(eoa);
-      logger.info(
-        '  delegated code now: ' +
-          (after.isDelegated ? String(after.delegate) : after.code.slice(0, 24))
-      );
+      if (
+        !after.isDelegated ||
+        !after.delegate ||
+        after.delegate.toLowerCase() !== this.batchExecutor.toLowerCase()
+      ) {
+        return {
+          success: false,
+          error: `BEBE delegation missing after type-4 (got ${after.delegate ?? after.code.slice(0, 24)})`,
+          txHash: sent.hash,
+          gasUsed: receipt.gasUsed,
+          authorization: auth,
+        };
+      }
+      // Empty self-call + skipped auth can still status=1 with very low gas.
+      if (receipt.gasUsed < 40_000n) {
+        return {
+          success: false,
+          error: `type-4 batch gasUsed too low (${receipt.gasUsed}) — likely no-op`,
+          txHash: sent.hash,
+          gasUsed: receipt.gasUsed,
+          authorization: auth,
+        };
+      }
+      logger.info('  delegated code now: ' + String(after.delegate));
 
       if (opts?.clearAfter) {
         const clearAuth = await this.authorizer.createClearAuthorization(
@@ -849,6 +897,8 @@ export class BatchEOAExecutor {
     path: Buffer | string;
     minAmountOut: bigint;
     gasLimit?: bigint;
+    /** Unix deadline for SwapRouter02 multicall wrapper (default now+120s). */
+    deadline?: number;
   }): Promise<DelegatedSwapResult> {
     const pathHex =
       typeof params.path === 'string'
@@ -858,12 +908,22 @@ export class BatchEOAExecutor {
     const erc20 = new ethers.Interface([
       'function approve(address spender, uint256 amount) returns (bool)',
     ]);
-    // SwapRouter02: exactInput((bytes,address,uint256,uint256)) — selector 0xb858183f
+    // SwapRouter02 exactInput has no deadline — wrap in multicall(deadline, data[]).
     const routerIface = new ethers.Interface([
       'function exactInput((bytes path, address recipient, uint256 amountIn, uint256 amountOutMinimum) params) payable returns (uint256 amountOut)',
+      'function multicall(uint256 deadline, bytes[] data) payable returns (bytes[] results)',
     ]);
 
     const eoa = await this.authority.getAddress();
+    const deadline = params.deadline ?? Math.floor(Date.now() / 1000) + 120;
+    const exactInputData = routerIface.encodeFunctionData('exactInput', [
+      {
+        path: pathHex,
+        recipient: eoa,
+        amountIn: params.amountIn,
+        amountOutMinimum: params.minAmountOut,
+      },
+    ]);
     const calls: BatchCall[] = [
       {
         to: params.tokenIn,
@@ -871,14 +931,7 @@ export class BatchEOAExecutor {
       },
       {
         to: params.router,
-        data: routerIface.encodeFunctionData('exactInput', [
-          {
-            path: pathHex,
-            recipient: eoa,
-            amountIn: params.amountIn,
-            amountOutMinimum: params.minAmountOut,
-          },
-        ]),
+        data: routerIface.encodeFunctionData('multicall', [deadline, [exactInputData]]),
       },
     ];
     return this.executeBatchCalls(calls, { gasLimit: params.gasLimit });

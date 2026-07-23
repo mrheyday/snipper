@@ -41,6 +41,9 @@ error FlashLoanFailed();
 error InsufficientRepayment(uint256 available, uint256 required);
 error PathMustEndInBorrowAsset(address pathEnd, address borrowAsset);
 error InvalidSwapPath();
+error MinAmountOutTooLow(uint256 minAmountOut, uint256 minRepay);
+error ZeroAddress();
+error Reentrancy();
 
 /// @title FlashLoanReceiver
 /// @notice Aave V3 flashLoanSimple receiver for single-block arbitrage on Arbitrum.
@@ -51,7 +54,7 @@ error InvalidSwapPath();
 ///         approve Pool for amount+premium; Pool pulls on return
 ///      4. Leftover `asset` is profit — withdraw promptly (griefing risk if parked)
 contract FlashLoanReceiver {
-    address public immutable owner;
+    address public owner;
     address public immutable swapExecutor;
     address public immutable lendingPool;
 
@@ -60,18 +63,36 @@ contract FlashLoanReceiver {
     ///      Arbitrum mainnet read 2026-07-23: 5 bps. Was historically 9 bps at V3 launch.
     uint256 public constant FLASH_LOAN_PREMIUM_RATE_BPS_HINT = 5;
 
+    bool transient locked;
+
     event FlashLoanExecuted(address indexed token, uint256 amount, uint256 premium, uint256 profit);
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
 
     modifier onlyOwner() {
         if (msg.sender != owner) revert Unauthorized();
         _;
     }
 
+    modifier nonReentrant() {
+        if (locked) revert Reentrancy();
+        locked = true;
+        _;
+        locked = false;
+    }
+
     constructor(address _swapExecutor, address _lendingPool) {
-        require(_swapExecutor != address(0) && _lendingPool != address(0), "zero address");
+        if (_swapExecutor == address(0) || _lendingPool == address(0)) revert ZeroAddress();
         owner = msg.sender;
         swapExecutor = _swapExecutor;
         lendingPool = _lendingPool;
+    }
+
+    /// @notice Transfer ownership (two-step not required for hot MEV ops; still explicit).
+    function transferOwnership(address newOwner) external onlyOwner {
+        if (newOwner == address(0)) revert ZeroAddress();
+        address previous = owner;
+        owner = newOwner;
+        emit OwnershipTransferred(previous, newOwner);
     }
 
     /// @notice Live premium bps from the configured Aave Pool (governance-updatable).
@@ -87,11 +108,17 @@ contract FlashLoanReceiver {
     function initiateFlashLoan(address token, uint256 amount, bytes calldata swapPath, uint256 minAmountOut)
         external
         onlyOwner
+        nonReentrant
     {
         // Min 2 hops (66 bytes): token|fee|mid|fee|token — single hop cannot repay flash.
         if (swapPath.length < 66 || (swapPath.length - 20) % 23 != 0) revert InvalidSwapPath();
         address pathEnd = address(bytes20(swapPath[swapPath.length - 20:]));
         if (pathEnd != token) revert PathMustEndInBorrowAsset(pathEnd, token);
+
+        // Reject loans that cannot repay even in the best case (uses live premium bps).
+        uint256 premiumBps = uint256(IPool(lendingPool).FLASHLOAN_PREMIUM_TOTAL());
+        uint256 minRepay = amount + (amount * premiumBps) / 10_000;
+        if (minAmountOut < minRepay) revert MinAmountOutTooLow(minAmountOut, minRepay);
 
         bytes memory params = abi.encode(token, swapPath, minAmountOut);
         // receiverAddress = address(this): same-contract path from Aave docs
@@ -102,6 +129,7 @@ contract FlashLoanReceiver {
     /// @dev Must approve Pool for amount+premium before returning true. Do not transfer.
     function executeOperation(address asset, uint256 amount, uint256 premium, address initiator, bytes calldata params)
         external
+        nonReentrant
         returns (bool)
     {
         if (msg.sender != lendingPool) revert Unauthorized();
@@ -109,6 +137,16 @@ contract FlashLoanReceiver {
         require(initiator == address(this), "Initiator mismatch");
 
         (, bytes memory swapPath, uint256 minAmountOut) = abi.decode(params, (address, bytes, uint256));
+
+        // Defense-in-depth: re-validate path in callback (not only at initiate).
+        // swapPath is memory (from abi.decode) so slice via assembly, not calldata range.
+        if (swapPath.length < 66 || (swapPath.length - 20) % 23 != 0) revert InvalidSwapPath();
+        address pathEnd;
+        /// @solidity memory-safe-assembly
+        assembly {
+            pathEnd := shr(96, mload(add(add(swapPath, 0x20), sub(mload(swapPath), 20))))
+        }
+        if (pathEnd != asset) revert PathMustEndInBorrowAsset(pathEnd, asset);
 
         // SniperSearcher pulls via transferFrom(msg.sender=this)
         SafeTransferLib.safeApproveWithRetry(asset, swapExecutor, amount);
@@ -141,7 +179,7 @@ contract FlashLoanReceiver {
     /// @param to Recipient address
     /// @param amount Amount to withdraw (0 = all)
     function withdraw(address token, address to, uint256 amount) external onlyOwner {
-        require(to != address(0), "Invalid recipient");
+        if (to == address(0)) revert ZeroAddress();
         if (amount == 0) amount = IERC20(token).balanceOf(address(this));
         SafeTransferLib.safeTransfer(token, to, amount);
     }
@@ -150,8 +188,8 @@ contract FlashLoanReceiver {
     /// @param to Recipient address
     /// @param amount Amount to withdraw (0 = all)
     function withdrawETH(address payable to, uint256 amount) external onlyOwner {
+        if (to == address(0)) revert ZeroAddress();
         if (amount == 0) amount = address(this).balance;
-        require(to != address(0), "Invalid recipient");
         SafeTransferLib.safeTransferETH(to, amount);
     }
 
@@ -159,6 +197,7 @@ contract FlashLoanReceiver {
     /// @param token Token to recover
     /// @param to Recipient address
     function emergencyWithdrawToken(address token, address to) external onlyOwner {
+        if (to == address(0)) revert ZeroAddress();
         uint256 balance = IERC20(token).balanceOf(address(this));
         if (balance > 0) {
             SafeTransferLib.safeTransfer(token, to, balance);
@@ -168,6 +207,7 @@ contract FlashLoanReceiver {
     /// @notice Emergency recovery for stuck ETH (alias for withdrawETH)
     /// @param to Recipient address
     function emergencyWithdrawETH(address payable to) external onlyOwner {
+        if (to == address(0)) revert ZeroAddress();
         uint256 balance = address(this).balance;
         if (balance > 0) {
             SafeTransferLib.safeTransferETH(to, balance);

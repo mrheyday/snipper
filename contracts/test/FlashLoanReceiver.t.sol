@@ -7,6 +7,7 @@ import {FlashLoanReceiver} from "../src/FlashLoanReceiver.sol";
 import {ERC20Mock} from "./mocks/ERC20Mock.sol";
 
 /// @dev Minimal Uniswap V3 SwapRouter02 mock matching IUniswapV3Router02 struct ABI.
+///      Supports single- and multi-hop paths; mints path-end token 1:1 for amountIn.
 contract MockRouter02 {
     struct ExactInputParams {
         bytes path;
@@ -18,10 +19,10 @@ contract MockRouter02 {
     function exactInput(ExactInputParams calldata params) external payable returns (uint256 amountOut) {
         require(params.path.length >= 43, "bad path");
         address tokenIn = address(bytes20(params.path[0:20]));
-        address tokenOut = address(bytes20(params.path[23:43]));
+        address tokenOut = address(bytes20(params.path[params.path.length - 20:]));
         // Pull input from caller (SniperSearcher)
         require(ERC20Mock(tokenIn).transferFrom(msg.sender, address(this), params.amountIn), "in");
-        amountOut = params.amountIn; // 1:1 mock
+        amountOut = params.amountIn; // 1:1 mock (round-trip arb with zero edge)
         require(amountOut >= params.amountOutMinimum, "min");
         ERC20Mock(tokenOut).mint(params.recipient, amountOut);
     }
@@ -53,43 +54,35 @@ contract FlashLoanReceiverTest is Test {
         tokenB = new ERC20Mock("B", "B", 18);
     }
 
-    function _pathAB() internal view returns (bytes memory) {
-        return abi.encodePacked(address(tokenA), uint24(3000), address(tokenB));
+    /// Round-trip A -> B -> A (two hops, 66 bytes) so path ends in borrow asset.
+    function _pathABA() internal view returns (bytes memory) {
+        return abi.encodePacked(address(tokenA), uint24(3000), address(tokenB), uint24(3000), address(tokenA));
     }
 
-    function _pathBA() internal view returns (bytes memory) {
-        return abi.encodePacked(address(tokenB), uint24(3000), address(tokenA));
-    }
-
-    /// Round-trip path A->B->A encoded as single multi-hop is complex for mock;
-    /// flash path uses one hop: borrow A, swap to B (profit on B), but repay needs A.
-    /// So for repay test we simulate same-asset "arb": path A->A-style by minting A back.
-    /// Better: borrow A, swap A->B on searcher which returns B to flash; then we only
-    /// prove approve + allowExecutor + return-to-caller. Repay with same-asset needs
-    /// path that ends in A. Use path A->B with minOut, then mint A back as "second leg".
+    /// @dev Round-trip flash: borrow A, swap A->B->A via searcher, approve Aave for repay.
     function test_ExecuteOperation_ApprovesExecutorAndReturnsOutToFlash() public {
         uint256 amount = 100e18;
         uint256 premium = amount * 5 / 10_000; // 0.05% (live Arbitrum FLASHLOAN_PREMIUM_TOTAL)
-        bytes memory path = _pathAB();
-        uint256 minOut = 100e18;
+        bytes memory path = _pathABA();
+        // minOut must cover amount+premium for real initiates; mock returns 1:1 so
+        // we mint extra A for the premium after the swap returns amount of A.
+        uint256 minOut = amount;
 
         // Simulate Aave transferring flash-borrowed A to receiver.
         tokenA.mint(address(flash), amount);
 
-        // Fund router side is handled by mock mint of tokenOut.
         bytes memory params = abi.encode(address(tokenA), path, minOut);
 
-        // After one hop, flash holds B not A — repay would fail. Fund the premium+loan
-        // of A so repay path is still exercised after the swap callback.
-        tokenA.mint(address(flash), amount + premium);
+        // Mock returns amount of A (1:1). Mint premium so amount+premium is available.
+        tokenA.mint(address(flash), premium);
 
         bool ok = flash.executeOperation(address(tokenA), amount, premium, address(flash), params);
         assertTrue(ok);
 
         // Searcher should not retain output (returned to flash).
-        assertEq(tokenB.balanceOf(address(searcher)), 0);
-        // Flash received the swap out.
-        assertEq(tokenB.balanceOf(address(flash)), minOut);
+        assertEq(tokenA.balanceOf(address(searcher)), 0);
+        // Flash holds borrowed+minted output for repay (amount from swap + premium minted).
+        assertGe(tokenA.balanceOf(address(flash)), amount + premium);
         // Allowance to searcher cleared after swap.
         assertEq(tokenA.allowance(address(flash), address(searcher)), 0);
         // Aave was approved for amount+premium (standing until Aave pulls).
@@ -103,7 +96,7 @@ contract FlashLoanReceiverTest is Test {
 
         uint256 amount = 100e18;
         tokenA.mint(address(orphan), amount);
-        bytes memory params = abi.encode(address(tokenA), _pathAB(), uint256(0));
+        bytes memory params = abi.encode(address(tokenA), _pathABA(), amount);
 
         vm.expectRevert(); // Unauthorized from SniperSearcher
         orphan.executeOperation(address(tokenA), amount, 0, address(orphan), params);
@@ -113,9 +106,22 @@ contract FlashLoanReceiverTest is Test {
         // If searcher is allowed but flash has zero balance, transferFrom fails.
         uint256 amount = 100e18;
         // no mint to flash
-        bytes memory params = abi.encode(address(tokenA), _pathAB(), uint256(0));
+        bytes memory params = abi.encode(address(tokenA), _pathABA(), amount);
         vm.expectRevert();
         flash.executeOperation(address(tokenA), amount, 0, address(flash), params);
+    }
+
+    function test_InitiateFlashLoan_RevertsWhenMinOutBelowRepay() public {
+        // Pool is address(this) and has no FLASHLOAN_PREMIUM_TOTAL — use vm.mockCall.
+        vm.mockCall(
+            pool,
+            abi.encodeWithSignature("FLASHLOAN_PREMIUM_TOTAL()"),
+            abi.encode(uint128(5))
+        );
+        uint256 amount = 100e18;
+        // minRepay = amount + amount*5/10000 = 100.05e18; pass lower minOut
+        vm.expectRevert();
+        flash.initiateFlashLoan(address(tokenA), amount, _pathABA(), amount);
     }
 
     function test_AllowExecutor_DeployWiresFlash() public view {
@@ -125,4 +131,8 @@ contract FlashLoanReceiverTest is Test {
     // Aave pool entrypoint unused in unit tests (we call executeOperation directly),
     // but provide so `pool == address(this)` looks like a realistic peer.
     function flashLoanSimple(address, address, uint256, bytes calldata, uint16) external pure {}
+
+    function FLASHLOAN_PREMIUM_TOTAL() external pure returns (uint128) {
+        return 5;
+    }
 }

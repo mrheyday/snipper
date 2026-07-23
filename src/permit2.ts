@@ -1,10 +1,14 @@
-import { Signer, Contract } from 'ethers';
+/**
+ * Uniswap Permit2 helper (canonical CREATE2: 0x000000000022D473030F116dDEE9F6B43aC78BA3).
+ * Correct ABI: approve(token, spender, amount, expiration); allowance returns (amount, expiration, nonce).
+ */
+import { Signer, Contract, type Provider } from 'ethers';
 
 const PERMIT2_ABI = [
-  'function approve(address token, uint160 amount, uint48 expiration) external',
-  'function permit(address owner, (address token, uint160 amount, uint48 expiration, uint48 nonce)[] details, bytes signature) external payable',
-  'function permitTransferFrom((address from, address to, uint160 requestedAmount, uint160 amount, uint48 expiration, uint48 nonce) details, bytes signature) external',
-  'function nonces(address owner, address token) view returns (uint48)',
+  'function approve(address token, address spender, uint160 amount, uint48 expiration) external',
+  'function allowance(address owner, address token, address spender) view returns (uint160 amount, uint48 expiration, uint48 nonce)',
+  'function permit(address owner, ((address token, uint160 amount, uint48 expiration, uint48 nonce) details, address spender, uint256 sigDeadline) permitSingle, bytes signature) external',
+  'function transferFrom(address from, address to, uint160 amount, address token) external',
 ];
 
 interface PermitDetails {
@@ -32,14 +36,13 @@ export class Permit2Handler {
   }
 
   /**
-   * Create EIP-712 signature for Permit2 approval
+   * Create EIP-712 signature for Permit2 PermitSingle
    */
   async signPermit(params: PermitSingle): Promise<string> {
     const domain = {
       name: 'Permit2',
       chainId: this.chainId,
       verifyingContract: this.permit2Address,
-      version: '1',
     };
 
     const types = {
@@ -59,7 +62,7 @@ export class Permit2Handler {
     const value = {
       details: {
         token: params.details.token,
-        amount: params.details.amount.toString(),
+        amount: params.details.amount,
         expiration: params.details.expiration,
         nonce: params.details.nonce,
       },
@@ -67,58 +70,36 @@ export class Permit2Handler {
       sigDeadline: params.sigDeadline,
     };
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const signerWithTypedData = this.signer as any;
-    return signerWithTypedData._signTypedData(domain, types, value);
+    return this.signer.signTypedData(domain, types, value);
   }
 
   /**
-   * Get current nonce for token
+   * Nonce for (owner, token, spender) from Permit2.allowance.
    */
-  async getNonce(ownerAddress: string, tokenAddress: string, provider: unknown): Promise<number> {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const permit2Contract = new Contract(this.permit2Address, PERMIT2_ABI, provider as any);
-    const nonce = await permit2Contract.nonces(ownerAddress, tokenAddress);
-    return nonce;
-  }
-
-  /**
-   * Create permit approval for token
-   */
-  async createPermit(
+  async getNonce(
     ownerAddress: string,
     tokenAddress: string,
-    amount: bigint,
     spender: string,
-    expiration: number,
-    provider: unknown
-  ): Promise<{ signature: string; permit: PermitSingle }> {
-    const nonce = await this.getNonce(ownerAddress, tokenAddress, provider);
-
-    const permit: PermitSingle = {
-      details: {
-        token: tokenAddress,
-        amount,
-        expiration,
-        nonce,
-      },
-      spender,
-      sigDeadline: Math.floor(Date.now() / 1000) + 1800, // 30 min from now
-    };
-
-    const signature = await this.signPermit(permit);
-
-    return { signature, permit };
+    provider: Provider
+  ): Promise<number> {
+    const permit2 = new Contract(this.permit2Address, PERMIT2_ABI, provider);
+    const [, , nonce] = await permit2.allowance(ownerAddress, tokenAddress, spender);
+    return Number(nonce);
   }
 
   /**
-   * Approve token via Permit2 (if needed)
+   * On-chain Permit2.approve(token, spender, amount, expiration).
    */
-  async approveToken(tokenAddress: string, amount: bigint, expiration: number): Promise<void> {
-    const permit2Contract = new Contract(this.permit2Address, PERMIT2_ABI, this.signer);
-
-    const tx = await permit2Contract.approve(tokenAddress, amount, expiration);
-    await tx.wait();
+  async approve(
+    token: string,
+    spender: string,
+    amount: bigint,
+    expiration: number
+  ): Promise<string> {
+    const permit2 = new Contract(this.permit2Address, PERMIT2_ABI, this.signer);
+    const tx = await permit2.approve(token, spender, amount, expiration);
+    const receipt = await tx.wait(1);
+    return receipt?.hash ?? tx.hash;
   }
 }
 

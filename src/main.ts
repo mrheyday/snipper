@@ -6,11 +6,14 @@ import { DEXAggregator } from './dexAggregator';
 import {
   provider,
   signer,
-  DEADLINE,
+  getDeadline,
   SNIPER_SEARCHER_ADDRESS,
   FLASH_LOAN_RECEIVER_ADDRESS,
   DELEGATED_EXECUTOR_ADDRESS,
+  BATCH_EXECUTOR_ADDRESS,
+  SWAP_ROUTER_ADDRESS,
 } from './config';
+import { Contract } from 'ethers';
 import { Logger } from './logger';
 import { validateAndChecksumAddress, validateFeeTier } from './validation';
 import { bitquery } from './bitquery';
@@ -196,7 +199,7 @@ class SniperBot {
           amountIn: sentinelAmount, // overridden by FlashSizer inside the bridge
           path,
           minAmountOut: 0n, // overridden by FlashSizer inside the bridge
-          deadline: DEADLINE,
+          deadline: getDeadline(2), // ~120s for snipes (matches on-chain default)
           estimatedProfit: 0n,
           poolAddress: detectedPool,
         });
@@ -255,47 +258,95 @@ class SniperBot {
   }
 
   /**
-   * Verify bot setup - validates all contract addresses and RPC connection
+   * Verify bot setup - validates all contract addresses, wiring, and ownership.
    */
   private async verifySetup(): Promise<void> {
     logger.info('Verifying setup...');
 
-    // Check RPC connection
     const blockNumber = await provider.getBlockNumber();
     logger.info(`✓ RPC connected (block ${blockNumber})`);
 
-    // Check wallet
     const walletAddress = validateAndChecksumAddress(await signer.getAddress());
     logger.info(`✓ Wallet: ${walletAddress}`);
 
-    // Validate contract addresses are deployed
-    try {
-      const sniperCode = await provider.getCode(SNIPER_SEARCHER_ADDRESS);
-      if (sniperCode === '0x') {
-        throw new Error(`SniperSearcher not deployed at ${SNIPER_SEARCHER_ADDRESS}`);
-      }
-      logger.info(`✓ SniperSearcher: ${SNIPER_SEARCHER_ADDRESS}`);
+    const requireCode = async (label: string, addr: string) => {
+      const code = await provider.getCode(addr);
+      if (code === '0x') throw new Error(`${label} not deployed at ${addr}`);
+      logger.info(`✓ ${label}: ${addr}`);
+    };
 
-      const flashCode = await provider.getCode(FLASH_LOAN_RECEIVER_ADDRESS);
-      if (flashCode === '0x') {
-        throw new Error(`FlashLoanReceiver not deployed at ${FLASH_LOAN_RECEIVER_ADDRESS}`);
-      }
-      logger.info(`✓ FlashLoanReceiver: ${FLASH_LOAN_RECEIVER_ADDRESS}`);
-
-      const delegatedCode = await provider.getCode(DELEGATED_EXECUTOR_ADDRESS);
-      if (delegatedCode === '0x') {
-        throw new Error(`DelegatedExecutor not deployed at ${DELEGATED_EXECUTOR_ADDRESS}`);
-      }
-      logger.info(`✓ DelegatedExecutor: ${DELEGATED_EXECUTOR_ADDRESS}`);
-    } catch (error) {
-      const err = new Error(
-        `Contract validation failed: ${error instanceof Error ? error.message : String(error)}`
-      ) as Error & { cause: unknown };
-      err.cause = error;
-      throw err;
+    await requireCode('SniperSearcher', SNIPER_SEARCHER_ADDRESS);
+    await requireCode('FlashLoanReceiver', FLASH_LOAN_RECEIVER_ADDRESS);
+    await requireCode('DelegatedExecutor', DELEGATED_EXECUTOR_ADDRESS);
+    if (BATCH_EXECUTOR_ADDRESS) {
+      await requireCode('BatchExecutor/BEBE', BATCH_EXECUTOR_ADDRESS);
     }
 
-    // Check execution contracts status
+    // Production wiring asserts (must match Deploy + Verify scripts).
+    const sniper = new Contract(
+      SNIPER_SEARCHER_ADDRESS,
+      [
+        'function owner() view returns (address)',
+        'function swapRouter() view returns (address)',
+        'function allowedExecutors(address) view returns (bool)',
+        'function minAmountBitLength() view returns (uint256)',
+      ],
+      provider
+    );
+    const flash = new Contract(
+      FLASH_LOAN_RECEIVER_ADDRESS,
+      [
+        'function owner() view returns (address)',
+        'function swapExecutor() view returns (address)',
+        'function lendingPool() view returns (address)',
+      ],
+      provider
+    );
+
+    const [sOwner, sRouter, flashAllowed, minBits, fOwner, fExec, fPool] =
+      await Promise.all([
+        sniper.owner() as Promise<string>,
+        sniper.swapRouter() as Promise<string>,
+        sniper.allowedExecutors(FLASH_LOAN_RECEIVER_ADDRESS) as Promise<boolean>,
+        sniper.minAmountBitLength() as Promise<bigint>,
+        flash.owner() as Promise<string>,
+        flash.swapExecutor() as Promise<string>,
+        flash.lendingPool() as Promise<string>,
+      ]);
+
+    if (sRouter.toLowerCase() !== SWAP_ROUTER_ADDRESS.toLowerCase()) {
+      throw new Error(
+        `SniperSearcher.swapRouter (${sRouter}) != SWAP_ROUTER_ADDRESS (${SWAP_ROUTER_ADDRESS})`
+      );
+    }
+    if (!flashAllowed) {
+      throw new Error(
+        'SniperSearcher.allowedExecutors(FlashLoanReceiver) is false — run allowExecutor'
+      );
+    }
+    if (fExec.toLowerCase() !== SNIPER_SEARCHER_ADDRESS.toLowerCase()) {
+      throw new Error(
+        `FlashLoanReceiver.swapExecutor (${fExec}) != SniperSearcher (${SNIPER_SEARCHER_ADDRESS})`
+      );
+    }
+    if (fOwner.toLowerCase() !== walletAddress.toLowerCase()) {
+      throw new Error(
+        `FlashLoanReceiver.owner (${fOwner}) != bot wallet (${walletAddress}) — cannot initiateFlashLoan`
+      );
+    }
+    if (sOwner.toLowerCase() !== walletAddress.toLowerCase()) {
+      logger.warn(
+        `SniperSearcher.owner (${sOwner}) != wallet (${walletAddress}) — direct mode needs owner or allowlist`
+      );
+    }
+    if (minBits > 0n) {
+      logger.warn(
+        `SniperSearcher.minAmountBitLength=${minBits} — 6-decimal assets may revert AmountTooSmall; prefer 0`
+      );
+    }
+    logger.info(`✓ Flash owner matches wallet; allowExecutor wired; pool=${fPool}`);
+    logger.info(`✓ SwapRouter: ${sRouter}`);
+
     const stats = await this.bridge.getExecutionStats();
     logger.info(`✓ Direct mode: ${stats.directReady ? 'ready' : 'not ready'}`);
     logger.info(`✓ Flash loan: ${stats.flashLoanReady ? 'ready' : 'not ready'}`);

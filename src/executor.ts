@@ -1,6 +1,7 @@
 import { ethers, Signer } from 'ethers';
 import { signer, provider } from './config';
-import { SNIPER_SEARCHER_ABI } from './abis';
+import { SNIPER_SEARCHER_ABI } from './contractABIs';
+import { getEip1559Fees } from './fees';
 import { Logger } from './logger';
 
 const logger = new Logger('SniperExecutor');
@@ -57,6 +58,7 @@ export class SniperExecutor {
       logger.info(`Gas estimate: ${gasEstimate.toString()}`);
       logger.info(`Deadline: ${deadline}`);
 
+      const fees = await getEip1559Fees();
       const tx = await this.searcher.executeSwapWithDeadline(
         params.tokenIn,
         params.amountIn,
@@ -64,8 +66,9 @@ export class SniperExecutor {
         params.minAmountOut,
         deadline,
         {
-          gasLimit: gasEstimate * 110n / 100n, // 10% buffer
-          maxFeePerGas: await provider.getFeeData().then((fd) => ((fd.gasPrice ?? 0n) * 120n) / 100n),
+          gasLimit: (gasEstimate * 110n) / 100n, // 10% buffer
+          maxFeePerGas: fees.maxFeePerGas,
+          maxPriorityFeePerGas: fees.maxPriorityFeePerGas,
         }
       );
 
@@ -148,14 +151,13 @@ export class SniperExecutor {
   }
 
   /**
-   * Decode revert reason from failed transaction
+   * Decode revert reason from failed transaction (custom errors + Error(string)).
    */
   private async decodeRevertReason(txHashValue: string): Promise<string> {
     try {
       const tx = await provider.getTransaction(txHashValue);
       if (!tx) return 'Transaction not found';
 
-      // Create a transaction request for the call
       const txRequest = {
         to: tx.to,
         from: tx.from,
@@ -164,19 +166,27 @@ export class SniperExecutor {
       };
 
       try {
-        const result = await provider.call({ ...txRequest, blockTag: tx.blockNumber ?? undefined });
-        if (result === '0x') return 'Unknown error';
-
-        // Try to decode as Error(string)
-        try {
-          const iface = new ethers.Interface(['function Error(string) public pure']);
-          const decoded = iface.decodeFunctionResult('Error', result);
-          return decoded[0] as string;
-        } catch {
-          return `Raw error data: ${result.slice(0, 200)}`;
+        await provider.call({ ...txRequest, blockTag: tx.blockNumber ?? undefined });
+        return 'Unknown error (call succeeded on replay)';
+      } catch (callError: unknown) {
+        const err = callError as { data?: string; reason?: string; message?: string; error?: { data?: string } };
+        const data =
+          err.data ||
+          err.error?.data ||
+          (typeof err.message === 'string' && err.message.includes('0x')
+            ? err.message.match(/0x[0-9a-fA-F]+/)?.[0]
+            : undefined);
+        if (data && data !== '0x') {
+          try {
+            const parsed = this.searcher.interface.parseError(data);
+            if (parsed) return `${parsed.name}(${parsed.args.map(String).join(', ')})`;
+          } catch {
+            /* fall through */
+          }
+          return `Raw error data: ${String(data).slice(0, 200)}`;
         }
-      } catch (callError) {
-        return callError instanceof Error ? callError.message : 'Call failed';
+        if (err.reason) return err.reason;
+        return err.message || 'Call failed';
       }
     } catch (error) {
       return error instanceof Error ? error.message : 'Unknown error';

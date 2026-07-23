@@ -5,6 +5,11 @@ import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 import {Multicallable} from "solady/utils/Multicallable.sol";
 import {MegaMEVOptimizationLib} from "./MegaMEVOptimizationLib.sol";
 
+/// @dev Minimal ERC20 surface for rescue balance queries.
+interface IERC20Like {
+    function balanceOf(address account) external view returns (uint256);
+}
+
 /// @dev Uniswap V3 SwapRouter02 exactInput — struct form, NO per-call deadline.
 ///      Selector: exactInput((bytes,address,uint256,uint256)) = 0xb858183f
 ///      Deadlines are enforced in this contract (see DeadlineExceeded checks).
@@ -153,7 +158,13 @@ contract DelegatedExecutor is Multicallable {
 
         SafeTransferLib.safeApprove(tokenIn, SWAP_ROUTER, 0);
 
-        emit Swap(tokenIn, _getTokenOut(path), amountIn, amountOut);
+        // Under 7702 funds stay on the EOA; external allowlisted callers get tokenOut back.
+        address tokenOut = _getTokenOut(path);
+        if (msg.sender != address(this)) {
+            SafeTransferLib.safeTransfer(tokenOut, msg.sender, amountOut);
+        }
+
+        emit Swap(tokenIn, tokenOut, amountIn, amountOut);
     }
 
     /// @notice Multi-hop swap with callback support
@@ -242,8 +253,29 @@ contract DelegatedExecutor is Multicallable {
 
             SafeTransferLib.safeApprove(swap.tokenIn, SWAP_ROUTER, 0);
 
-            emit Swap(swap.tokenIn, _getTokenOut(swap.path), swap.amountIn, amountsOut[i]);
+            address tokenOut = _getTokenOut(swap.path);
+            if (msg.sender != address(this)) {
+                SafeTransferLib.safeTransfer(tokenOut, msg.sender, amountsOut[i]);
+            }
+
+            emit Swap(swap.tokenIn, tokenOut, swap.amountIn, amountsOut[i]);
         }
+    }
+
+    /// @notice Owner rescue for ERC20 stuck on the *implementation* (not 7702 EOA storage).
+    /// @dev Under EIP-7702, `owner` lives in the EOA's storage slot and is typically unset
+    ///      (zero); rescue is intended for the pre-deployed contract address only.
+    function rescueToken(address token, address to, uint256 amount) external onlyOwner {
+        if (to == address(0)) revert ZeroAddress();
+        if (amount == 0) amount = IERC20Like(token).balanceOf(address(this));
+        SafeTransferLib.safeTransfer(token, to, amount);
+    }
+
+    /// @notice Owner rescue for ETH stuck on the implementation.
+    function rescueETH(address payable to, uint256 amount) external onlyOwner {
+        if (to == address(0)) revert ZeroAddress();
+        if (amount == 0) amount = address(this).balance;
+        SafeTransferLib.safeTransferETH(to, amount);
     }
 
     /// @notice Receive tokens (for fallback swaps)

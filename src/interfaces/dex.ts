@@ -164,7 +164,8 @@ export const DEX_ADDRESSES = {
   arbitrum: {
     uniswapV3Router: '0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45',
     uniswapV3Factory: '0x1F98431c8aD98523631AE4a59f267346ea31F984',
-    uniswapV3Quoter: '0xb27F1F9b63B33565Db3F05B3d9cFDA23dd927d0f',
+    // QuoterV2 (shared address on Ethereum + Arbitrum)
+    uniswapV3Quoter: '0x61fFE014bA17989E743c5F6cB21bF9697530B21e',
     curveFactory: '0x0C0e5f27145aa72D1A2973d60741d84d0b062bC3',
     balancerVault: '0xBA12222222228d8Ba445958a75a0704d566BF2C8',
     dodoDpp: '0xE4b2Dfc82976062a6a0eB6e0564af5547AB41ffb',
@@ -172,7 +173,7 @@ export const DEX_ADDRESSES = {
   ethereum: {
     uniswapV3Router: '0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45',
     uniswapV3Factory: '0x1F98431c8aD98523631AE4a59f267346ea31F984',
-    uniswapV3Quoter: '0xb27F1F9b63B33565Db3F05B3d9cFDA23dd927d0f',
+    uniswapV3Quoter: '0x61fFE014bA17989E743c5F6cB21bF9697530B21e',
   },
 };
 

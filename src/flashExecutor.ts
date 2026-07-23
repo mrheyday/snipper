@@ -4,9 +4,11 @@ import {
   provider,
   BATCH_EXECUTOR_ADDRESS,
   CHAIN_ID,
+  FLASH_USE_TYPE4,
 } from './config';
 import { FLASH_LOAN_RECEIVER_ABI } from './contractABIs';
 import { BatchEOAExecutor, BatchCall } from './eip7702';
+import { getEip1559Fees } from './fees';
 import { Logger } from './logger';
 import { getReserveEligibility } from './aaveReserves';
 
@@ -144,14 +146,26 @@ export class FlashLoanExecutor {
 
       // Type-4 path: EOA delegates to BEBE and CALLs FlashLoanReceiver.initiateFlashLoan.
       // Owner of the receiver must be the signing EOA (msg.sender under EIP-7702).
-      if (params.useType4) {
+      const wantType4 = params.useType4 === true || (params.useType4 !== false && FLASH_USE_TYPE4);
+      if (wantType4) {
         return this.executeFlashLoanType4(params);
+      }
+
+      // Owner must match signer for onlyOwner initiate.
+      const owner: string = await this.receiver.owner();
+      const signerAddr = await this.executorSigner.getAddress();
+      if (owner.toLowerCase() !== signerAddr.toLowerCase()) {
+        return {
+          success: false,
+          error: `FlashLoanReceiver.owner (${owner}) != signer (${signerAddr})`,
+        };
       }
 
       // Estimate gas
       const gasEstimate = await this.estimateFlashLoanGas(params);
       logger.info(`Gas estimate: ${gasEstimate.toString()}`);
 
+      const fees = await getEip1559Fees();
       // Initiate flash loan (standard type-2 EIP-1559 tx)
       const tx = await this.receiver.initiateFlashLoan(
         params.token,
@@ -159,8 +173,9 @@ export class FlashLoanExecutor {
         params.swapPath,
         params.minAmountOut,
         {
-          gasLimit: gasEstimate * 115n / 100n, // 15% buffer
-          maxFeePerGas: await provider.getFeeData().then((fd) => ((fd.gasPrice ?? 0n) * 120n) / 100n), // 20% above current
+          gasLimit: (gasEstimate * 115n) / 100n, // 15% buffer
+          maxFeePerGas: fees.maxFeePerGas,
+          maxPriorityFeePerGas: fees.maxPriorityFeePerGas,
         }
       );
 
@@ -369,6 +384,16 @@ export class FlashLoanExecutor {
       };
     }
 
+    const owner: string = await this.receiver.owner();
+    const signerAddr = await this.executorSigner.getAddress();
+    if (owner.toLowerCase() !== signerAddr.toLowerCase()) {
+      return {
+        success: false,
+        error: `Type-4 flash requires FlashLoanReceiver.owner == EOA (owner=${owner}, eoa=${signerAddr})`,
+        type4: true,
+      };
+    }
+
     const pathHex =
       typeof params.swapPath === 'string'
         ? params.swapPath
@@ -383,14 +408,16 @@ export class FlashLoanExecutor {
 
     const calls: BatchCall[] = [
       {
-        to: (this.receiver.target as string),
+        to: this.receiver.target as string,
         data,
       },
     ];
 
     logger.info('Initiating flash loan via EIP-7702 type-4 batch');
-    logger.info(`  receiver: ${(this.receiver.target as string)}`);
+    logger.info(`  receiver: ${this.receiver.target as string}`);
     logger.info(`  batchExecutor: ${this.batchExecutor.getExecutorAddress()}`);
+
+    const balanceBefore: bigint = await this.receiver.getBalance(params.token);
 
     const result = await this.batchExecutor.executeBatchCalls(calls, {
       // Flash + Aave callback + Uniswap swap is heavier than a plain approve/swap.
@@ -407,9 +434,48 @@ export class FlashLoanExecutor {
       };
     }
 
-    const profit = await this.getProfitEstimate(params);
-    if ((profit > 0)) {
-      logger.info(`Estimated profit: ${ethers.formatUnits(profit, 18)}`);
+    // Require on-chain evidence: FlashLoanExecuted log or balance increase (profit).
+    let sawEvent = false;
+    if (result.txHash) {
+      try {
+        const receipt = await provider.getTransactionReceipt(result.txHash);
+        if (receipt) {
+          for (const log of receipt.logs) {
+            try {
+              const parsed = this.receiver.interface.parseLog({
+                topics: [...log.topics],
+                data: log.data,
+              });
+              if (parsed?.name === 'FlashLoanExecuted') {
+                sawEvent = true;
+                break;
+              }
+            } catch {
+              /* not our log */
+            }
+          }
+        }
+      } catch {
+        /* non-fatal; fall through to balance check */
+      }
+    }
+
+    const balanceAfter: bigint = await this.receiver.getBalance(params.token);
+    const profit = balanceAfter > balanceBefore ? balanceAfter - balanceBefore : 0n;
+
+    if (!sawEvent && profit === 0n) {
+      return {
+        success: false,
+        error:
+          'type-4 tx confirmed but no FlashLoanExecuted event and no profit balance delta — auth/call may have been a no-op',
+        txHash: result.txHash,
+        gasUsed: result.gasUsed,
+        type4: true,
+      };
+    }
+
+    if (profit > 0n) {
+      logger.info(`On-chain profit (balance delta): ${profit.toString()}`);
     }
 
     return {

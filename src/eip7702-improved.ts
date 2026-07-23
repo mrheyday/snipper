@@ -1,7 +1,7 @@
 /**
- * @deprecated Use ./eip7702.ts — this file still personal-signs the auth
- * digest and never attaches authorizationList to a type-4 tx. Kept only so
- * existing imports do not break during the cutover.
+ * @deprecated DO NOT USE IN PRODUCTION.
+ * Broken 7702 path: personal_sign auth, non-RLP digest, no authorizationList / type-4.
+ * Use `./eip7702.ts` only. This module throws on construction to prevent accidental use.
  */
 import { ethers } from 'ethers';
 import { signer, provider } from './config';
@@ -9,6 +9,9 @@ import { Logger } from './logger';
 import { validateAndChecksumAddress } from './validation';
 
 const logger = new Logger('EIP7702');
+
+const DEPRECATED_MSG =
+  'eip7702-improved is deprecated and unsafe. Import from ./eip7702 instead.';
 
 /**
  * EIP-7702: Set EOA Account Code
@@ -63,6 +66,7 @@ export class EIP7702AuthorizationSigner {
   private chainId: number;
 
   constructor(delegatedExecutorAddress: string, chainId: number = 42161) {
+    throw new Error(DEPRECATED_MSG);
     this.delegatedExecutor = validateAndChecksumAddress(delegatedExecutorAddress);
     this.chainId = chainId;
   }
@@ -124,6 +128,7 @@ export class EIP7702DelegatedExecutor {
   private authorizer: EIP7702AuthorizationSigner;
 
   constructor(delegatedExecutorAddress: string, chainId: number = 42161) {
+    throw new Error(DEPRECATED_MSG);
     this.delegatedExecutor = new ethers.Contract(
       validateAndChecksumAddress(delegatedExecutorAddress),
       [
