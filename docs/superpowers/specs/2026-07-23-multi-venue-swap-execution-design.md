@@ -3,19 +3,24 @@
 Date: 2026-07-23
 Status: Approved (pending implementation plan)
 
+**Amendment (2026-07-23):** the original venue list below (4 venues, including Ramses V2) and
+the router/quoter addresses in `dexAggregator.ts` were both wrong. See "Address verification"
+for what changed and why. Corrected scope: 3 execution venues, not 4.
+
 ## Goal
 
-Today, best-route *quoting* already spans 5 Arbitrum DEXes (`ARBITRUM_DEX_PROTOCOLS` in
+Today, best-route *quoting* is supposed to span 5 Arbitrum DEXes (`ARBITRUM_DEX_PROTOCOLS` in
 `src/dexAggregator.ts`), but actual on-chain *execution* — both the flash-loan path and the
 direct-swap path — is hardcoded to Uniswap V3's SwapRouter02 only, because the venue is baked
-into contract constructors as `immutable`/`constant`. This spec widens execution to 4 venues:
+into contract constructors as `immutable`/`constant`. This spec widens execution to 3 verified,
+same-ABI venues:
 
 - Uniswap V3
 - SushiSwap V3
-- Ramses V2
 - PancakeSwap V3
 
-Camelot V3 is explicitly **out of scope** for execution (see "Deferred").
+Camelot V3 and Ramses are both explicitly **out of scope** for execution (see "Deferred") — for
+different reasons; see "Address verification" below.
 
 ## Background: why this needs a contract change, not just a TS change
 
@@ -47,7 +52,7 @@ Uniswap-only: `main.ts:164-190` probes a single 1-token amount via `EXECUTION_VE
 
 This means FlashSizer's chosen "best" venue and the venue actually executed against can silently
 diverge. It's currently masked because execution is Uniswap-only anyway — a non-Uniswap "best"
-quote from FlashSizer never reaches the chain. Once execution opens to 4 venues, this becomes a
+quote from FlashSizer never reaches the chain. Once execution opens to 3 venues, this becomes a
 real bug (size computed against one venue's price curve, trade executed against another's,
 potential revert or a wrongly-computed `minAmountOut`).
 
@@ -72,7 +77,7 @@ changes" below.
 - `_executeSwap` uses the validated `router` in place of the old immutable `swapRouter` for the
   approve + `exactInput` call.
 - `_validatePath` is unchanged — its fee-tiered encoding (`(path.length - 20) % 23 == 0`) is valid
-  for all 4 in-scope venues (all genuine Uniswap V3 forks).
+  for all 3 in-scope venues (all genuine Uniswap V3 forks).
 
 ### `FlashLoanReceiver.sol`
 
@@ -94,11 +99,11 @@ changes" below.
 
 ## Off-chain changes
 
-- **`dexAggregator.ts`**: `EXECUTION_VENUE_PROTOCOLS` widens from `[Uniswap V3]` to the 4 venues.
+- **`dexAggregator.ts`**: `EXECUTION_VENUE_PROTOCOLS` widens from `[Uniswap V3]` to the 3 venues.
   Comment updated to explain the Camelot exclusion.
 - **`flashSizer.ts`**:
   - Its internal `DEXAggregator` switches from `ARBITRUM_DEX_PROTOCOLS` (all 5) to
-    `EXECUTION_VENUE_PROTOCOLS` (the 4 executable venues). This is the fix for the size/execution
+    `EXECUTION_VENUE_PROTOCOLS` (the 3 executable venues). This is the fix for the size/execution
     mismatch described above, not just a widening — it makes "best size" and "best route" the same
     search. No real-world regression from dropping Camelot here: `main.ts`'s pre-check already
     gates on `EXECUTION_VENUE_PROTOCOLS` *before* FlashSizer ever runs, so a Camelot-only pair is
@@ -118,7 +123,7 @@ changes" below.
 - **`eip7702.ts`** (`EIP7702Executor`, dormant EIP-7702 mode): mirrors the same signature update
   for `DelegatedExecutor`'s new `router` param.
 - **`allowlist.ts`**: `ALLOWED_ROUTERS_DEFAULT` widens from a single duplicated SwapRouter02 entry
-  to the 4 router addresses (sourced from `dexAggregator.ts`'s protocol list), keeping the
+  to the 3 router addresses (sourced from `dexAggregator.ts`'s protocol list), keeping the
   off-chain pre-flight gate (`isRouterAllowed`, called at `main.ts:175` and boot-time via
   `assertRouterAllowed`) in sync with what the contracts will accept on-chain. `ALLOWED_ROUTERS`
   env var can still add more / override.
@@ -134,14 +139,14 @@ Bitquery currently plays three roles, none of which are route-selection: candida
 fourth, narrowly scoped role: sanity-checking the venue FlashSizer's on-chain Quoter search picks.
 
 Constraint: Bitquery's `poolSlippage`/`poolLiquidity` take a single pool address, and none of the
-4 venues' Quoter calls currently expose pool addresses (Uniswap-style Quoters resolve the pool
+3 venues' Quoter calls currently expose pool addresses (Uniswap-style Quoters resolve the pool
 internally via their own factory). Also, FlashSizer's binary search evaluates up to ~18 candidate
-sizes per pair, each currently doing up to 4 on-chain Quoter calls — calling Bitquery at that same
-per-size, per-venue granularity would mean up to ~72 GraphQL calls per candidate pair per ~3s loop
+sizes per pair, each currently doing up to 3 on-chain Quoter calls — calling Bitquery at that same
+per-size, per-venue granularity would mean up to ~54 GraphQL calls per candidate pair per ~3s loop
 iteration, which would hit rate limits and add real latency. The existing depth-cap call is
 deliberately done once, before the search — this addition follows the same shape.
 
-- **`dexAggregator.ts`**: add `factoryAddress` to `DEXProtocolConfig` for each of the 4 execution
+- **`dexAggregator.ts`**: add `factoryAddress` to `DEXProtocolConfig` for each of the 3 execution
   venues, plus a `resolvePoolAddress(factory, tokenA, tokenB, feeTier)` helper (one `getPool()`
   view call).
 - **`flashSizer.ts`**: after `binarySearch` converges on a final winner (router + feeTier +
@@ -164,13 +169,13 @@ deliberately done once, before the search — this addition follows the same sha
 
 ```
 main.ts tryCandidatePair()
-  ├─ DEXAggregator.findBestRoute() over 4 execution venues  — cheap early feasibility check only
-  ├─ isRouterAllowed() gate (off-chain allowlist, now 4 routers)
+  ├─ DEXAggregator.findBestRoute() over 3 execution venues  — cheap early feasibility check only
+  ├─ isRouterAllowed() gate (off-chain allowlist, now 3 routers)
   └─ bridge.executeOptimal()
        └─ executeFlashLoan()
             └─ FlashSizer.computeOptimalSize()
                  ├─ Aave liquidity cap, Bitquery candidate-pool depth cap (unchanged, step 2b)
-                 ├─ binary search over 4 execution venues (was 5, Camelot dropped from sizing too)
+                 ├─ binary search over 3 execution venues (was 5; Camelot and Ramses dropped from sizing too)
                  ├─ resolve winning venue's pool address, Bitquery cross-check (new)
                  └─ return SizedLoan { amount, router, feeTier, ... }
             ├─ rebuild path from sized.router / sized.feeTier   (was: reuse main.ts's Uniswap-only path)
@@ -223,3 +228,34 @@ TypeScript test framework configured, so this spec doesn't introduce one.
 - **Activating the standalone EIP-7702 delegated-swap path.** `DelegatedExecutor` gets the same
   router-allowlist shape for consistency, but actually wiring `bridge.ts` to use
   `ExecutionMode.EIP7702` in production is not part of this change.
+- **Ramses.** See "Address verification" — it's a Solidly-family AMM (stable/volatile pool flag,
+  different router call shape), not a Uniswap V3 fork. It needs the same kind of dedicated
+  adapter work as Camelot, not a router-allowlist entry, and is not part of this change.
+  `EXECUTION_VENUE_PROTOCOLS` does not include it; it is also dropped from
+  `ARBITRUM_DEX_PROTOCOLS`-based quoting until that adapter exists, since the address
+  previously used for it had no deployed contract behind it anyway (see below).
+- **SushiSwap V3 / PancakeSwap V3 quoting bug this spec also fixes in passing.** Independent of
+  the execution-venue widening, the *existing* `ARBITRUM_DEX_PROTOCOLS` entries for SushiSwap V3,
+  PancakeSwap V3 (router only — its quoter was correct), Ramses V2, and Camelot V3 all pointed at
+  addresses with **no deployed contract** on Arbitrum One (confirmed via `eth_getCode`). This
+  means multi-DEX quoting for anything but Uniswap V3 has silently never worked — every quote call
+  to those addresses failed and fell through the existing try/catch to `null`, indistinguishable
+  from "no pool for this pair." This spec's implementation replaces the SushiSwap V3 and
+  PancakeSwap V3 entries with the verified addresses below as part of widening execution (since
+  quoting correctly is a prerequisite for executing against them); Ramses and Camelot's broken
+  entries are left as-is pending their respective follow-up adapters.
+
+## Address verification
+
+The addresses below were cross-checked against multiple independent sources — official protocol
+docs, a separate sibling MEV project's (`/Users/hs/mev-arbitrum`) bytecode-verified address
+registry, and direct on-chain calls made during this design session (Arbitrum One, verified
+2026-07-23) — not carried over from the existing (broken) `dexAggregator.ts` entries.
+
+| Venue | Router | Factory | Quoter | Verification |
+|---|---|---|---|---|
+| Uniswap V3 | `0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45` | `0x1F98431c8aD98523631AE4a59f267346ea31F984` | `0x61fFE014bA17989E743c5F6cB21bF9697530B21e` | Already correct in-repo; router's own `factory()` call confirmed on-chain. |
+| SushiSwap V3 | `0x8A21F6768C1f8075791D08546Dadf6daA0bE820c` | `0x1af415a1EbA07a4986a52B6f2e7dE7003D82231e` | `0x0524E833cCD057e4d7A296e3aaAb9f7675964Ce1` | Router and quoter's `factory()` both confirmed on-chain to return the factory address; router address also matches `sushiswap/v3-periphery`'s own checked-in `deployments/arbitrum/SwapRouter.json` exactly; quoter sourced from the same repo's `QuoterV2.json`. Replaces broken in-repo addresses for all three. |
+| PancakeSwap V3 | `0x32226588378236Fd0c7c4053999F88aC0e5cAc77` | `0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865` | `0xB048Bbc1Ee6b733FFfCFb9e9CeF7375518e25997` | Router sourced from `developer.pancakeswap.finance/contracts/v3/addresses`; confirmed on-chain by probing `exactInput(...)` directly (reverted with Uniswap periphery's own `"STF"` transfer-failure string, proving selector match) and by its `factory()` call matching the documented factory. Quoter was already correct in-repo; router address replaces the broken in-repo one. |
+| Ramses V2 | `0xAA23611badAFB62D37E7295A682D21960ac85A90` (real contract, **not usable as-is**) | n/a | n/a | Real contract confirmed on-chain, but classified by the sibling project's `docs/architecture/dex-inventory.md` as `DexKind 8 (Solidly)` — a Solidly-family AMM, not Uniswap-V3-style. Deferred; not part of `EXECUTION_VENUE_PROTOCOLS`. |
+| Camelot V3 | — | — | — | Already deferred in the original spec (Algebra engine); addresses in-repo for it are also dead contracts, moot until its adapter is designed. |
