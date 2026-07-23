@@ -169,7 +169,12 @@ export class SniperExecutor {
         await provider.call({ ...txRequest, blockTag: tx.blockNumber ?? undefined });
         return 'Unknown error (call succeeded on replay)';
       } catch (callError: unknown) {
-        const err = callError as { data?: string; reason?: string; message?: string; error?: { data?: string } };
+        const err = callError as {
+          data?: string;
+          reason?: string;
+          message?: string;
+          error?: { data?: string };
+        };
         const data =
           err.data ||
           err.error?.data ||
@@ -208,19 +213,19 @@ export class SniperExecutor {
     const ownerAddress = await this.executorSigner.getAddress();
     const currentAllowance: bigint = await erc20.allowance(
       ownerAddress,
-      (this.searcher.target as string)
+      this.searcher.target as string
     );
-    if ((currentAllowance >= amount)) return;
+    if (currentAllowance >= amount) return;
 
     // Reset to 0 first for non-standard ERC20s that require it, then set exact amount.
-    if ((currentAllowance > 0)) {
-      const resetTx = await erc20.approve((this.searcher.target as string), 0);
+    if (currentAllowance > 0) {
+      const resetTx = await erc20.approve(this.searcher.target as string, 0);
       await resetTx.wait(1);
     }
     logger.info(
-      `Approving SniperSearcher (${(this.searcher.target as string)}) for exact ${amount.toString()} of ${token}...`
+      `Approving SniperSearcher (${this.searcher.target as string}) for exact ${amount.toString()} of ${token}...`
     );
-    const approveTx = await erc20.approve((this.searcher.target as string), amount);
+    const approveTx = await erc20.approve(this.searcher.target as string, amount);
     await approveTx.wait(1);
     logger.info('✓ Exact approval confirmed');
   }
@@ -248,7 +253,7 @@ export class SniperExecutor {
         params.minAmountOut,
         params.deadline,
         {
-          gasLimit: gasEstimate * 110n / 100n,
+          gasLimit: (gasEstimate * 110n) / 100n,
         }
       );
 
@@ -418,7 +423,7 @@ export class SniperExecutor {
    * Get searcher address
    */
   getSearcherAddress(): string {
-    return (this.searcher.target as string);
+    return this.searcher.target as string;
   }
 }
 

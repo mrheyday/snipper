@@ -114,6 +114,7 @@ bun dev -- 0.001  # Start with small amount
 Bot automatically selects the best mode:
 
 ### Mode 1: Direct (Pre-deployed Contract)
+
 - **When**: Capital available, persistent trades
 - **Capital**: Required upfront
 - **Fee**: 0% (only gas)
@@ -121,6 +122,7 @@ Bot automatically selects the best mode:
 - **Best for**: Frequent trading
 
 ### Mode 2: Flash Loan (Aave V3)
+
 - **When**: Zero capital, high profit
 - **Capital**: Not required
 - **Fee**: 0.09% of borrowed amount
@@ -128,6 +130,7 @@ Bot automatically selects the best mode:
 - **Best for**: One-shot arbitrage, low capital
 
 ### Mode 3: EIP-7702 (Delegated Code)
+
 - **When**: One-time opportunities, privacy
 - **Capital**: Required but returned after tx
 - **Fee**: 0% (only gas)
@@ -150,6 +153,7 @@ DEBUG=1 bun dev -- 0.001
 ```
 
 **Output example:**
+
 ```
 [2026-07-22T14:30:00.000Z] ℹ️  [SniperBot] Starting Arbitrum Sniper Bot
 [2026-07-22T14:30:00.100Z] ✅ [SniperBot] RPC connected (block 12345678)
@@ -197,26 +201,31 @@ Before running on mainnet:
 ## 10. Troubleshooting
 
 ### "No route found"
+
 - Tokens don't have sufficient liquidity
 - Try different token pair
 - Check pool freshness (pool just created)
 
 ### "Insufficient output"
+
 - Sandwich attack occurred
 - Slippage too low (increase to 1%)
 - Pool moved while tx pending
 
 ### "Not enough ETH for gas"
+
 - Fund wallet with more ETH
 - Check gas prices (may spike during congestion)
 - Try flash loan mode (0 capital required)
 
 ### "Invalid swap path"
+
 - Token addresses incorrect
 - Fee tier unsupported
 - Pool doesn't exist
 
 ### "All execution modes failed"
+
 - Check all contract addresses
 - Verify contracts deployed correctly
 - Check Aave V3 availability
@@ -225,24 +234,28 @@ Before running on mainnet:
 ## 11. Advanced Configuration
 
 ### Custom Slippage
+
 ```bash
 # Edit .env
 SLIPPAGE_TOLERANCE=1.0  # 1% (less aggressive)
 ```
 
 ### Custom Deadline
+
 ```bash
 # Edit .env
 DEADLINE_IN_MINUTES=60  # 60 seconds to execute
 ```
 
 ### Force Execution Mode
+
 ```typescript
 // In bridge.ts
-bridge.setPreferredMode(ExecutionMode.FLASH_LOAN);  // Always use flash loans
+bridge.setPreferredMode(ExecutionMode.FLASH_LOAN); // Always use flash loans
 ```
 
 ### Multi-Chain
+
 ```bash
 # Update .env
 CHAIN_ID=8453  # Base
@@ -292,8 +305,8 @@ const result = await bridge.executeOptimal({
 
 // Check execution stats
 const stats = await bridge.getExecutionStats();
-console.log(stats.flashLoanReady);  // true
-console.log(stats.balance);         // 10 ETH
+console.log(stats.flashLoanReady); // true
+console.log(stats.balance); // 10 ETH
 ```
 
 ## 15. Deployment Checklist

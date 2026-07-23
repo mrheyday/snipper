@@ -8,9 +8,10 @@ Instead of deploying your own `DelegatedExecutor`, you can use existing well-tes
 
 **Repository:** https://github.com/Vectorized/bebe  
 **Type:** ERC-7821 EOA Batch Executor for EIP-7702  
-**Canonical Address:** `0x00000000BEBEDB7C30ee418158e26E31a5A8f3E2` (all networks)  
+**Canonical Address:** `0x00000000BEBEDB7C30ee418158e26E31a5A8f3E2` (all networks)
 
 **Features:**
+
 - ✅ Stateless design (no storage dependencies)
 - ✅ ERC-1271 signature validation (ecrecover)
 - ✅ Batch operation support
@@ -78,13 +79,13 @@ EOA
 
 ### Comparison: Self-Deployed vs Pre-Deployed
 
-| Aspect | Self-Deployed | Pre-Deployed (bebe) |
-|--------|---------------|-------------------|
-| **Deployment Cost** | ~0.05-0.1 ETH | $0 (already deployed) |
-| **Gas Efficiency** | Base implementation | Optimized |
-| **Auditing** | Your responsibility | Audited by Vectorized |
-| **Updates** | Manual redeploy | Use latest version |
-| **Dependencies** | Full control | Trust external maintainer |
+| Aspect              | Self-Deployed       | Pre-Deployed (bebe)       |
+| ------------------- | ------------------- | ------------------------- |
+| **Deployment Cost** | ~0.05-0.1 ETH       | $0 (already deployed)     |
+| **Gas Efficiency**  | Base implementation | Optimized                 |
+| **Auditing**        | Your responsibility | Audited by Vectorized     |
+| **Updates**         | Manual redeploy     | Use latest version        |
+| **Dependencies**    | Full control        | Trust external maintainer |
 
 ### Advantages of Using bebe
 
@@ -166,9 +167,10 @@ cast send <swap-contract> "executeSwap(...)" \
 ✅ **Trusted Source**: Vectorized is a reputable protocol builder  
 ✅ **Audited Code**: bebe has been professionally audited  
 ✅ **Open Source**: Full source available on GitHub  
-✅ **No Upgrades**: Most delegatees are immutable  
+✅ **No Upgrades**: Most delegatees are immutable
 
 ⚠️ **Always verify**:
+
 - Contract address matches official repo
 - No recent security incidents
 - Your RPC connection is secure
@@ -177,6 +179,7 @@ cast send <swap-contract> "executeSwap(...)" \
 ## Summary
 
 Using Vectorized's `bebe` delegatee provides:
+
 - **Faster deployment** (no deploy time)
 - **Better gas efficiency** (optimized implementation)
 - **Reduced risk** (battle-tested, audited)

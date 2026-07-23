@@ -3,17 +3,17 @@
 ## Building a request
 
 ```typescript
-import { TransactionRequest } from "ethers";
+import { TransactionRequest } from 'ethers';
 
 const tx: TransactionRequest = {
   to: address,
-  value: parseEther("0.1"),       // bigint, wei
-  data: encodedCalldata,           // optional
-  gasLimit: 21000n,                 // optional — omit to let ethers estimate
+  value: parseEther('0.1'), // bigint, wei
+  data: encodedCalldata, // optional
+  gasLimit: 21000n, // optional — omit to let ethers estimate
   maxFeePerGas: feeData.maxFeePerGas,
   maxPriorityFeePerGas: feeData.maxPriorityFeePerGas,
-  nonce: explicitNonce,             // optional — omit to let the provider assign it
-  type: 2,                          // EIP-1559; omit type/leave unset to let ethers infer from fee fields
+  nonce: explicitNonce, // optional — omit to let the provider assign it
+  type: 2, // EIP-1559; omit type/leave unset to let ethers infer from fee fields
 };
 ```
 
@@ -43,7 +43,7 @@ const feeData = await provider.getFeeData();
 `feeData.maxFeePerGas` already incorporates ethers' own heuristic estimate of the current base fee — you generally don't need to compute it manually. If you do need the raw base fee (e.g. for custom fee-bumping logic in a sniper/MEV bot), read it off the latest block instead of `feeData` — v6 removed the v5 `lastBaseFeePerGas` field:
 
 ```typescript
-const block = await provider.getBlock("latest");
+const block = await provider.getBlock('latest');
 const baseFeePerGas = block.baseFeePerGas; // bigint | null
 ```
 

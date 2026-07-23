@@ -48,7 +48,7 @@ await txResponse.wait();
 Verify a signed message against an address:
 
 ```typescript
-import { verifyMessage } from "ethers";
+import { verifyMessage } from 'ethers';
 const recovered = verifyMessage(message, signature); // -> address string; compare to expected signer
 ```
 
@@ -61,7 +61,7 @@ const json = await wallet.encrypt(password: string | Uint8Array, progressCallbac
 
 ## VoidSigner
 
-Use `VoidSigner` when you need something with a Signer's *address* (e.g. to build `contract.connect(voidSigner.connect(provider))` for a `staticCall` "simulate as this address" check) but have no private key and never intend to actually sign:
+Use `VoidSigner` when you need something with a Signer's _address_ (e.g. to build `contract.connect(voidSigner.connect(provider))` for a `staticCall` "simulate as this address" check) but have no private key and never intend to actually sign:
 
 ```typescript
 import { VoidSigner } from "ethers";

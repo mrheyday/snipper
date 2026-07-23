@@ -1,11 +1,5 @@
 import { ethers, Signer, Wallet } from 'ethers';
-import {
-  signer,
-  provider,
-  BATCH_EXECUTOR_ADDRESS,
-  CHAIN_ID,
-  FLASH_USE_TYPE4,
-} from './config';
+import { signer, provider, BATCH_EXECUTOR_ADDRESS, CHAIN_ID, FLASH_USE_TYPE4 } from './config';
 import { FLASH_LOAN_RECEIVER_ABI } from './contractABIs';
 import { BatchEOAExecutor, BatchCall } from './eip7702';
 import { getEip1559Fees } from './fees';
@@ -82,7 +76,7 @@ export class FlashLoanExecutor {
       FLASH_LOAN_RECEIVER_ABI,
       this.executorSigner
     );
-        // Optional EIP-7702 type-4 path (requires BATCH_EXECUTOR_ADDRESS + Wallet signer).
+    // Optional EIP-7702 type-4 path (requires BATCH_EXECUTOR_ADDRESS + Wallet signer).
     if (BATCH_EXECUTOR_ADDRESS && this.executorSigner instanceof Wallet) {
       this.batchExecutor = new BatchEOAExecutor(
         BATCH_EXECUTOR_ADDRESS,
@@ -214,7 +208,7 @@ export class FlashLoanExecutor {
 
       // Check profit
       const profit = await this.getProfitEstimate(params);
-      if ((profit > 0)) {
+      if (profit > 0) {
         logger.info(`Estimated profit: ${ethers.formatUnits(profit, 18)}`);
       }
 
@@ -259,7 +253,7 @@ export class FlashLoanExecutor {
     const successCount = results.filter((r) => r.success).length;
     const totalProfit = results
       .filter((r) => r.profit)
-      .reduce((sum, r) => (sum + r.profit!), BigInt(0));
+      .reduce((sum, r) => sum + r.profit!, BigInt(0));
 
     logger.info(`Batch complete: ${successCount}/${loanBatches.length} successful`);
     logger.info(`Total profit: ${ethers.formatUnits(totalProfit, 18)}`);
@@ -331,7 +325,7 @@ export class FlashLoanExecutor {
    * Get receiver contract address
    */
   getReceiverAddress(): string {
-    return (this.receiver.target as string);
+    return this.receiver.target as string;
   }
 
   /**
@@ -342,12 +336,10 @@ export class FlashLoanExecutor {
    */
   private async getProfitEstimate(params: FlashLoanParams): Promise<bigint> {
     const feeBps = await this.getFlashPremiumBps();
-    const fee = params.amount * BigInt(feeBps) / BigInt(10000);
-    const totalCost = (params.amount + fee);
+    const fee = (params.amount * BigInt(feeBps)) / BigInt(10000);
+    const totalCost = params.amount + fee;
 
-    return (params.minAmountOut - (totalCost) > 0)
-      ? (params.minAmountOut - totalCost)
-      : 0n;
+    return params.minAmountOut - totalCost > 0 ? params.minAmountOut - totalCost : 0n;
   }
 
   /**
@@ -378,8 +370,7 @@ export class FlashLoanExecutor {
     if (!this.batchExecutor) {
       return {
         success: false,
-        error:
-          'Type-4 flash loan unavailable: set BATCH_EXECUTOR_ADDRESS and use a Wallet signer',
+        error: 'Type-4 flash loan unavailable: set BATCH_EXECUTOR_ADDRESS and use a Wallet signer',
         type4: true,
       };
     }
@@ -395,9 +386,7 @@ export class FlashLoanExecutor {
     }
 
     const pathHex =
-      typeof params.swapPath === 'string'
-        ? params.swapPath
-        : ethers.hexlify(params.swapPath);
+      typeof params.swapPath === 'string' ? params.swapPath : ethers.hexlify(params.swapPath);
 
     const data = INITIATE_FLASH_IFACE.encodeFunctionData('initiateFlashLoan', [
       params.token,
@@ -601,7 +590,7 @@ export class FlashLoanExecutor {
           'Need ≥2 hops ending in borrow asset (min 66 bytes).',
       };
     }
-    if (((hex.length / 2 - 20) % 23) !== 0) {
+    if ((hex.length / 2 - 20) % 23 !== 0) {
       return { ok: false, reason: 'Flash path length is not a valid Uni V3 encoding' };
     }
 
@@ -636,11 +625,8 @@ export class FlashLoanExecutor {
  * Default 5 bps matches Arbitrum FLASHLOAN_PREMIUM_TOTAL as of 2026-07-23.
  * Pass live bps from Pool.FLASHLOAN_PREMIUM_TOTAL() when available.
  */
-export function calculateFlashLoanFee(
-  amount: bigint,
-  premiumBps: number = 5
-): bigint {
-  return amount * BigInt(premiumBps) / BigInt(10000);
+export function calculateFlashLoanFee(amount: bigint, premiumBps: number = 5): bigint {
+  return (amount * BigInt(premiumBps)) / BigInt(10000);
 }
 
 /**
@@ -653,8 +639,8 @@ export function calculateBreakEvenPrice(
   outputDecimals: number = 18
 ): number {
   const fee = calculateFlashLoanFee(loanAmount);
-  const totalCost = (loanAmount + fee);
-  const breakEven = (totalCost / expectedOutput);
+  const totalCost = loanAmount + fee;
+  const breakEven = totalCost / expectedOutput;
   return parseFloat(ethers.formatUnits(breakEven, outputDecimals));
 }
 
@@ -662,15 +648,12 @@ export function calculateBreakEvenPrice(
  * Calculate max borrow amount given gas budget
  * maxBorrow = gasbudget / (gasPricePerBorrow + ~0.05% fee cost)
  */
-export function calculateMaxBorrowAmount(
-  gasBudgetWei: bigint,
-  gasPriceWei: bigint
-): bigint {
+export function calculateMaxBorrowAmount(gasBudgetWei: bigint, gasPriceWei: bigint): bigint {
   // Calculate max borrow given gas budget
-  const maxFromBudget = (gasBudgetWei / gasPriceWei);
+  const maxFromBudget = gasBudgetWei / gasPriceWei;
 
   // Fee impact at 5 bps: effective cost ≈ 1.0005 per token
-  return maxFromBudget * 10000n / 10005n;
+  return (maxFromBudget * 10000n) / 10005n;
 }
 
 export default FlashLoanExecutor;

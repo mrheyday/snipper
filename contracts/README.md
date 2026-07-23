@@ -25,12 +25,14 @@ forge script script/DeployBatchExecutor.s.sol --rpc-url arbitrum --broadcast --v
 ### SniperSearcher.sol
 
 Core MEV searcher contract that:
+
 - Receives tokens from the bot
 - Executes swaps on Uniswap V3 SwapRouter02
 - Manages profits and withdrawals
 - Owner-controlled operations
 
 **Key Features:**
+
 - `executeSwap()` — Execute exact-input swap with 30-second deadline
 - `executeSwapWithDeadline()` — Execute swap with custom deadline
 - `withdraw()` — Withdraw specific token amount
@@ -39,6 +41,7 @@ Core MEV searcher contract that:
 - Receive ETH for gas refunds
 
 **Security:**
+
 - Only owner can execute swaps and withdraw
 - SafeERC20 for safe token transfers
 - Input validation for amounts and paths
@@ -61,6 +64,7 @@ forge test --gas-report
 ```
 
 **Test Coverage:**
+
 - ✓ Deployment initialization
 - ✓ Unauthorized caller reversion
 - ✓ Token withdrawal
@@ -90,6 +94,7 @@ forge script script/Deploy.s.sol --rpc-url arbitrum_sepolia --broadcast --verify
 ```
 
 **Uniswap V3 SwapRouter02 Addresses:**
+
 - Arbitrum Mainnet: `0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45`
 - Arbitrum Sepolia: `0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45`
 
@@ -122,6 +127,7 @@ forge coverage
 ## Configuration
 
 See `foundry.toml` for:
+
 - Solidity version (0.8.36)
 - EVM target (Osaka)
 - Optimizer settings (runs: 200)

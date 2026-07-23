@@ -41,9 +41,12 @@ export const buildERC20TokenWithContract = async (
   try {
     const checksummedAddress = validateAndChecksumAddress(address);
     const contract = new Contract(checksummedAddress, ERC20_ABI, provider) as Contract & {
-      name(): Promise<string>; symbol(): Promise<string>; decimals(): Promise<number>;
-      balanceOf(a: string): Promise<bigint>; allowance(o:string,s:string):Promise<bigint>;
-      approve(s:string,a:bigint):Promise<ethers.ContractTransactionResponse>;
+      name(): Promise<string>;
+      symbol(): Promise<string>;
+      decimals(): Promise<number>;
+      balanceOf(a: string): Promise<bigint>;
+      allowance(o: string, s: string): Promise<bigint>;
+      approve(s: string, a: bigint): Promise<ethers.ContractTransactionResponse>;
     };
     const [name, symbol, decimalsRaw] = await Promise.all([
       contract.name(),
@@ -115,20 +118,15 @@ export const getTokens = async (opts?: { wethOnly?: boolean }): Promise<Tokens> 
     const wethOnly = opts?.wethOnly !== false;
     const pools = await bitquery.latestPoolCreated({ wethOnly, limit: 20 });
     // Prefer first allowlisted snipe pair (base flash token + target)
-    const pick =
-      pools.find((p) => isSnipePairAllowed(p.token0, p.token1)) ?? pools[0];
+    const pick = pools.find((p) => isSnipePairAllowed(p.token0, p.token1)) ?? pools[0];
     if (!pick) {
       logger.error(
-        wethOnly
-          ? 'No recent WETH-paired PoolCreated events'
-          : 'No recent PoolCreated events'
+        wethOnly ? 'No recent WETH-paired PoolCreated events' : 'No recent PoolCreated events'
       );
       return { Token0: null, Token1: null };
     }
     if (!isSnipePairAllowed(pick.token0, pick.token1)) {
-      logger.warn(
-        `Pool ${pick.token0}/${pick.token1} not on snipe allowlist — skipping`
-      );
+      logger.warn(`Pool ${pick.token0}/${pick.token1} not on snipe allowlist — skipping`);
       return { Token0: null, Token1: null };
     }
     logger.info(

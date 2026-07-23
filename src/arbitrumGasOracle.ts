@@ -134,15 +134,15 @@ export class ArbitrumGasOracle {
     // Estimate calldata cost (each byte of tx data posted to L1)
     // This is approximately 16 gas per non-zero byte, 4 gas per zero byte
     const calldataBytes = (txData.length - 2) / 2; // Convert hex to bytes
-    const calldataCost = (BigInt(calldataBytes) * prices.calldataGasPerBytePosted);
+    const calldataCost = BigInt(calldataBytes) * prices.calldataGasPerBytePosted;
 
     // L2 execution cost
-    const l2Cost = (gasLimit * prices.l2BaseFeeWei);
+    const l2Cost = gasLimit * prices.l2BaseFeeWei;
 
     // Total cost = L2 execution + L1 calldata
-    const totalCost = (l2Cost + calldataCost);
+    const totalCost = l2Cost + calldataCost;
 
-    const percentageL1 = (totalCost > 0) ? Number((calldataCost * 10000n) / totalCost) / 100 : 0;
+    const percentageL1 = totalCost > 0 ? Number((calldataCost * 10000n) / totalCost) / 100 : 0;
     const percentageL2 = 100 - percentageL1;
 
     logger.info(`Transaction cost breakdown:`);
@@ -177,14 +177,14 @@ export class ArbitrumGasOracle {
     const arbitrumCosts = await this.estimateTransactionCost(txData, gasLimit);
 
     // L1 would cost: gasLimit * L1 base fee
-    const l1Cost = (gasLimit * l1GasPrice);
+    const l1Cost = gasLimit * l1GasPrice;
 
     // Arbitrum costs: L2 + L1 calldata
     const l2Cost = arbitrumCosts.totalEstimatedCost;
 
     // Calculate savings
-    const savings = (l1Cost - l2Cost);
-    const savingsPercent = (l1Cost > 0) ? Number((savings * 10000n) / l1Cost) / 100 : 0;
+    const savings = l1Cost - l2Cost;
+    const savingsPercent = l1Cost > 0 ? Number((savings * 10000n) / l1Cost) / 100 : 0;
 
     logger.info(`L1 vs L2 Comparison:`);
     logger.info(`  L1 cost: ${ethers.formatUnits(l1Cost, 'gwei')} gwei`);
@@ -239,9 +239,9 @@ export class ArbitrumGasOracle {
     ];
 
     return modes.map(({ mode, estimatedGas, calldataBytes }) => {
-      const l2Cost = (estimatedGas * prices.l2BaseFeeWei);
-      const l1Cost = (BigInt(calldataBytes) * prices.calldataGasPerBytePosted);
-      const totalCost = (l2Cost + l1Cost);
+      const l2Cost = estimatedGas * prices.l2BaseFeeWei;
+      const l1Cost = BigInt(calldataBytes) * prices.calldataGasPerBytePosted;
+      const totalCost = l2Cost + l1Cost;
 
       return {
         mode,
@@ -267,8 +267,8 @@ export class ArbitrumGasOracle {
     const typicalGasLimit = BigInt('145000');
     const typicalCalldataBytes = 260;
 
-    const l2Component = (typicalGasLimit * prices.l2BaseFeeWei);
-    const l1Component = (BigInt(typicalCalldataBytes) * prices.calldataGasPerBytePosted);
+    const l2Component = typicalGasLimit * prices.l2BaseFeeWei;
+    const l1Component = BigInt(typicalCalldataBytes) * prices.calldataGasPerBytePosted;
 
     return {
       l1Component,
@@ -290,12 +290,13 @@ export class ArbitrumGasOracle {
 
     // Find cheapest mode
     const cheapest = modeCosts.reduce((a, b) =>
-      (a.totalCostEstimate < b.totalCostEstimate) ? a : b
+      a.totalCostEstimate < b.totalCostEstimate ? a : b
     );
 
-    const reason = cheapest.totalCostEstimate < BigInt('10000000000000000000')
-      ? 'Low L1 calldata cost'
-      : 'Optimized for L2 execution';
+    const reason =
+      cheapest.totalCostEstimate < BigInt('10000000000000000000')
+        ? 'Low L1 calldata cost'
+        : 'Optimized for L2 execution';
 
     logger.info(`Recommended mode: ${cheapest.mode} (${reason})`);
 

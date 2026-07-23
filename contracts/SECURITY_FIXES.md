@@ -12,14 +12,14 @@ Implemented comprehensive security fixes addressing **1 CRITICAL, 2 HIGH, and 3 
 
 ### Severity Breakdown
 
-| Severity | Issue | Status | Details |
-|----------|-------|--------|---------|
-| CRITICAL | Reentrancy + Arbitrary Callback | ✅ Fixed | Added transient storage reentrancy guard + callback validation |
-| HIGH #1 | Missing Access Control | ✅ Fixed | Added allowedEOAs mapping + onlyAllowedEOA modifier |
-| HIGH #2 | Integration Failure | ✅ Fixed | Added allowedExecutors mapping to SniperSearcher |
-| MEDIUM #1 | Zero Test Coverage | ⏳ Pending | Requires separate FlashLoanReceiver.t.sol (15+ tests) |
-| MEDIUM #2 | Unused Variables | ✅ Fixed | Removed unused `recipient` parameter in FlashLoanReceiver |
-| MEDIUM #3 | Unused Parameter | ✅ Fixed | Removed unused `amountOut` from `_executeCallback` |
+| Severity  | Issue                           | Status     | Details                                                        |
+| --------- | ------------------------------- | ---------- | -------------------------------------------------------------- |
+| CRITICAL  | Reentrancy + Arbitrary Callback | ✅ Fixed   | Added transient storage reentrancy guard + callback validation |
+| HIGH #1   | Missing Access Control          | ✅ Fixed   | Added allowedEOAs mapping + onlyAllowedEOA modifier            |
+| HIGH #2   | Integration Failure             | ✅ Fixed   | Added allowedExecutors mapping to SniperSearcher               |
+| MEDIUM #1 | Zero Test Coverage              | ⏳ Pending | Requires separate FlashLoanReceiver.t.sol (15+ tests)          |
+| MEDIUM #2 | Unused Variables                | ✅ Fixed   | Removed unused `recipient` parameter in FlashLoanReceiver      |
+| MEDIUM #3 | Unused Parameter                | ✅ Fixed   | Removed unused `amountOut` from `_executeCallback`             |
 
 ---
 
@@ -161,10 +161,10 @@ function _executeCallback(bytes calldata callbackData, uint256 amountOut) intern
 // After
 function _executeCallback(bytes calldata callbackData) internal {
   require(callbackData.length >= 4, "Invalid callback");
-  
+
   bytes4 selector = bytes4(callbackData[:4]);
   require(selector != bytes4(0), "Invalid callback selector");
-  
+
   (bool success,) = address(this).call(callbackData);
   require(success, 'Callback failed');
 }
@@ -205,7 +205,7 @@ contract FlashLoanReceiverTest is Test {
   FlashLoanReceiver public flashReceiver;
   MockLendingPool public lendingPool;
   MockSwapExecutor public swapExecutor;
-  
+
   // Test cases needed:
   // - test_FlashLoan_Success()
   // - test_FlashLoan_InsufficientRepayment()

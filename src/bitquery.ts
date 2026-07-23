@@ -90,19 +90,29 @@ function token(): string {
   return process.env.BITQUERY_TOKEN || '';
 }
 
-function argAddress(args: Array<{ Name?: string; Value?: { address?: string } }>, name: string): string | undefined {
+function argAddress(
+  args: Array<{ Name?: string; Value?: { address?: string } }>,
+  name: string
+): string | undefined {
   const hit = args.find((a) => (a.Name || '').toLowerCase() === name.toLowerCase());
   return hit?.Value?.address;
 }
 
-function parsePoolArgs(args: Array<{ Name?: string; Value?: { address?: string; integer?: number; bigInteger?: string } }>): PoolCreatedEvent | null {
+function parsePoolArgs(
+  args: Array<{
+    Name?: string;
+    Value?: { address?: string; integer?: number; bigInteger?: string };
+  }>
+): PoolCreatedEvent | null {
   if (!args?.length) return null;
   const token0 = argAddress(args as never, 'token0') || args[0]?.Value?.address;
   const token1 = argAddress(args as never, 'token1') || args[1]?.Value?.address;
   if (!token0 || !token1) return null;
   const feeArg = args.find((a) => (a.Name || '').toLowerCase() === 'fee');
   const pool = argAddress(args as never, 'pool');
-  const feeRaw = feeArg?.Value?.integer ?? (feeArg?.Value?.bigInteger ? Number(feeArg.Value.bigInteger) : undefined);
+  const feeRaw =
+    feeArg?.Value?.integer ??
+    (feeArg?.Value?.bigInteger ? Number(feeArg.Value.bigInteger) : undefined);
   return { token0, token1, fee: feeRaw, pool };
 }
 
@@ -311,7 +321,13 @@ query LatestPools($factory: String!, $limit: Int!) {
   }
 }`;
     const data = await this.query<{
-      EVM?: { Events?: Array<{ Transaction?: { Hash?: string }; Block?: { Time?: string }; Arguments?: unknown[] }> };
+      EVM?: {
+        Events?: Array<{
+          Transaction?: { Hash?: string };
+          Block?: { Time?: string };
+          Arguments?: unknown[];
+        }>;
+      };
     }>(q, { factory, limit });
 
     const out: PoolCreatedEvent[] = [];
@@ -362,8 +378,17 @@ subscription PoolCreated($factory: String!) {
       gql,
       (raw) => {
         const events =
-          (raw as { EVM?: { Events?: Array<{ Transaction?: { Hash?: string }; Block?: { Time?: string }; Arguments?: unknown[] }> } })
-            ?.EVM?.Events ?? [];
+          (
+            raw as {
+              EVM?: {
+                Events?: Array<{
+                  Transaction?: { Hash?: string };
+                  Block?: { Time?: string };
+                  Arguments?: unknown[];
+                }>;
+              };
+            }
+          )?.EVM?.Events ?? [];
         for (const ev of events) {
           const parsed = parsePoolArgs(ev.Arguments as never);
           if (!parsed) continue;
@@ -438,8 +463,18 @@ subscription DexTrades {
         for (const row of trades) {
           const trade = row.Trade as {
             Dex?: { ProtocolName?: string };
-            Buy?: { Amount?: string; Buyer?: string; Currency?: { SmartContract?: string }; Price?: number };
-            Sell?: { Amount?: string; Seller?: string; Currency?: { SmartContract?: string }; Price?: number };
+            Buy?: {
+              Amount?: string;
+              Buyer?: string;
+              Currency?: { SmartContract?: string };
+              Price?: number;
+            };
+            Sell?: {
+              Amount?: string;
+              Seller?: string;
+              Currency?: { SmartContract?: string };
+              Price?: number;
+            };
           };
           const tx = row.Transaction as { Hash?: string } | undefined;
           onTrade({
@@ -554,9 +589,7 @@ query PoolSlippage($pool: String!, $limit: Int!) {
       if (a && b) return BigInt(a) > BigInt(b) ? a : b;
       return a ?? b ?? null;
     } catch (e) {
-      logger.warn(
-        `maxInputAtSlippage failed: ${e instanceof Error ? e.message : String(e)}`
-      );
+      logger.warn(`maxInputAtSlippage failed: ${e instanceof Error ? e.message : String(e)}`);
       return null;
     }
   }
@@ -677,8 +710,7 @@ query RecentTrades($limit: Int!) {
         const b = row.Trade?.Buy?.Currency?.SmartContract;
         if (!a || !b) continue;
         if (wethOnly && !isWethPair(a, b)) continue;
-        const [lo, hi] =
-          a.toLowerCase() < b.toLowerCase() ? [a, b] : [b, a];
+        const [lo, hi] = a.toLowerCase() < b.toLowerCase() ? [a, b] : [b, a];
         const key = `${lo.toLowerCase()}_${hi.toLowerCase()}`;
         const prev = map.get(key);
         if (prev) {
@@ -705,9 +737,7 @@ query RecentTrades($limit: Int!) {
       }
       return [...map.values()].sort((x, y) => y.tradeCount - x.tradeCount);
     } catch (e) {
-      logger.warn(
-        `recentHotPairs failed: ${e instanceof Error ? e.message : String(e)}`
-      );
+      logger.warn(`recentHotPairs failed: ${e instanceof Error ? e.message : String(e)}`);
       return [];
     }
   }

@@ -17,8 +17,8 @@ In ethers v6:
 ```typescript
 interface AuthorizationRequest {
   address: string;
-  nonce?: BigNumberish;   // omit to let ethers fill in from the signer's current nonce
-  chainId?: BigNumberish;  // omit to default to the connected network; pass 0n explicitly for "any chain"
+  nonce?: BigNumberish; // omit to let ethers fill in from the signer's current nonce
+  chainId?: BigNumberish; // omit to default to the connected network; pass 0n explicitly for "any chain"
 }
 
 interface Authorization extends AuthorizationRequest {
@@ -32,7 +32,7 @@ interface Authorization extends AuthorizationRequest {
 ## Signing an authorization
 
 ```typescript
-import { Wallet, JsonRpcProvider } from "ethers";
+import { Wallet, JsonRpcProvider } from 'ethers';
 
 const provider = new JsonRpcProvider(rpcUrl);
 const signer = new Wallet(privateKey, provider);
@@ -52,18 +52,18 @@ const authorization = await signer.authorize({
 ```typescript
 const tx = await signer.sendTransaction({
   type: 4,
-  to: targetAddress,       // the call this tx actually makes, separate from the delegation itself
+  to: targetAddress, // the call this tx actually makes, separate from the delegation itself
   data: calldata,
   authorizationList: [authorization], // Array<AuthorizationLike>
 });
 await tx.wait();
 ```
 
-A single transaction can carry multiple authorizations (e.g. delegating several accounts in one tx if you control all their keys), and the authorizing account does not have to be the same account that sends the transaction — a relayer/sponsor can submit a tx containing an authorization signed by a different EOA. If the authorizing account *is* the tx sender, some clients allow omitting that authorization's nonce field for ethers to infer correctly; when in doubt, pass it explicitly rather than relying on inference.
+A single transaction can carry multiple authorizations (e.g. delegating several accounts in one tx if you control all their keys), and the authorizing account does not have to be the same account that sends the transaction — a relayer/sponsor can submit a tx containing an authorization signed by a different EOA. If the authorizing account _is_ the tx sender, some clients allow omitting that authorization's nonce field for ethers to infer correctly; when in doubt, pass it explicitly rather than relying on inference.
 
 ## What actually happens on-chain
 
-Once applied, the EOA's code is set to a **delegation designator**: `0xef0100` followed by the 20-byte delegate address. Calls to the EOA now execute the delegate contract's code with the EOA's own storage/context. This is why `DelegatedExecutor.sol`-style contracts in this repo exist — they're the code an EOA delegates *to*, not a contract you deploy-and-call in the usual sense.
+Once applied, the EOA's code is set to a **delegation designator**: `0xef0100` followed by the 20-byte delegate address. Calls to the EOA now execute the delegate contract's code with the EOA's own storage/context. This is why `DelegatedExecutor.sol`-style contracts in this repo exist — they're the code an EOA delegates _to_, not a contract you deploy-and-call in the usual sense.
 
 To clear a delegation, authorize to the zero address (`0x0000000000000000000000000000000000000000`).
 

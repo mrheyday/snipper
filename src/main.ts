@@ -50,9 +50,12 @@ interface Config {
 class SniperBot {
   private bridge: ExecutionBridge;
   private config: Config;
+  private isRunning = true;
+  private loopIntervalMs: number;
 
   constructor(config: Config) {
     this.config = config;
+    this.loopIntervalMs = parseInt(process.env.LOOP_INTERVAL_MS || '3000', 10);
     this.bridge = new ExecutionBridge({
       sniperSearcherAddress: config.sniperSearcherAddress,
       flashLoanReceiverAddress: config.flashLoanReceiverAddress,
@@ -63,192 +66,206 @@ class SniperBot {
   }
 
   /**
-   * Main execution loop
+   * Stop continuous loop gracefully
    */
-  async run(): Promise<void> {
-    logger.info('Starting Arbitrum Sniper Bot');
+  stop(): void {
+    this.isRunning = false;
+  }
 
-    try {
-      // Verify setup
-      await this.verifySetup();
-      assertRouterAllowed(SWAP_ROUTER_ADDRESS);
-      logAllowlistSummary();
+  /**
+   * Continuous loop execution
+   */
+  async runLoop(): Promise<void> {
+    logger.info('🚀 Starting Arbitrum Sniper Bot in continuous loop mode...');
 
-      // Bitquery: rank hot pairs + new pools against allowlist + Aave flash bases
-      logger.info('Discovering best sniping token set (Bitquery + allowlist)...');
-      const discovered = await getBestSnipeTokens();
-      const { Token0, Token1, set: tokenSet } = discovered;
-      const detectedPool = discovered.pool;
+    // Verify setup once before entering main execution loop
+    await this.verifySetup();
+    assertRouterAllowed(SWAP_ROUTER_ADDRESS);
+    logAllowlistSummary();
 
-      if (!Token0 || !Token1) {
-        throw new Error(
-          'Failed to detect allowlisted snipe tokens (check BITQUERY_TOKEN / ALLOWED_TOKENS)'
-        );
-      }
-      if (!isSnipePairAllowed(Token0.token.address, Token1.token.address)) {
-        throw new Error(
-          `Pair not allowlisted: ${Token0.token.address} / ${Token1.token.address}`
-        );
-      }
-      if (tokenSet.candidates.length) {
-        logger.info(`Top snipe candidates (${tokenSet.candidates.length}):`);
-        for (const c of tokenSet.candidates.slice(0, 5)) {
-          logger.info(
-            `  #${c.rank} score=${c.score.toFixed(1)} ${c.baseSymbol ?? c.baseToken.slice(0, 8)}→${
-              c.targetSymbol ?? c.targetToken.slice(0, 8)
-            } [${c.source}] trades=${c.tradeCount ?? 0}`
-          );
-        }
-      }
-      if (detectedPool) {
-        logger.info(`Pool address from Bitquery: ${detectedPool}`);
-      }
-      if (discovered.fee !== undefined) {
-        logger.info(`Pool fee tier from event: ${discovered.fee}`);
-      }
-
-      const walletAddress = await signer.getAddress();
-
-      // Orient: flash borrow base (Aave) → target listing
-      let tokenFromObj = Token0;
-      let tokenToObj = Token1;
-
-      if (isFlashBaseToken(Token1.token.address) && !isFlashBaseToken(Token0.token.address)) {
-        tokenFromObj = Token1;
-        tokenToObj = Token0;
-      } else if (isFlashBaseToken(Token0.token.address)) {
-        tokenFromObj = Token0;
-        tokenToObj = Token1;
-      } else if (
-        AAVE_FLASH_BASE_TOKENS.map((t) => t.toLowerCase()).includes(
-          Token1.token.address.toLowerCase()
-        )
-      ) {
-        tokenFromObj = Token1;
-        tokenToObj = Token0;
-      } else {
-        const bal0 = await Token0.contract.balanceOf(walletAddress);
-        const bal1 = await Token1.contract.balanceOf(walletAddress);
-        if (bal0 === 0n && bal1 > 0n) {
-          tokenFromObj = Token1;
-          tokenToObj = Token0;
-        }
-      }
-
-      const tokenFrom = tokenFromObj.token;
-      const tokenTo = tokenToObj.token;
-
-      logger.info(
-        `Target Snipe Direction: ${tokenFrom.symbol} (${tokenFrom.address}) → ${tokenTo.symbol} (${tokenTo.address})`
-      );
-
-      // Validate wallet balances
-      const walletBalance = await provider.getBalance(walletAddress);
-      logger.info(`Wallet ETH balance: ${ethers.formatEther(walletBalance)} ETH`);
-
-      const tokenBalance = await tokenFromObj.contract.balanceOf(walletAddress);
-      logger.info(
-        `Input token balance: ${ethers.formatUnits(tokenBalance, tokenFrom.decimals)} ${tokenFrom.symbol}`
-      );
-
-      // Flash loans require zero upfront capital — no balance check needed.
-      // FlashSizer will verify the loan is viable against Aave liquidity before
-      // any on-chain transaction is submitted.
-      logger.info('Flash-loan mode: skipping wallet token balance check (no capital required)');
-
-      // Multi-DEX Path Finding — query with a 1-token sentinel to discover the
-      // best fee tier. FlashSizer will re-quote at the dynamically computed size.
-      logger.info('Discovering best Uniswap V3 fee tier (allowlisted router only)...');
-      // Only Uniswap V3 — SniperSearcher is hard-wired to SwapRouter02
-      const dexAggregator = new DEXAggregator(provider, EXECUTION_VENUE_PROTOCOLS);
-      const probeAmount = ethers.parseUnits('1', tokenFrom.decimals);
-      const bestRoute = await dexAggregator.findBestRoute(
-        tokenFrom.address,
-        tokenTo.address,
-        probeAmount
-      );
-      if (bestRoute && !isRouterAllowed(bestRoute.protocol.routerAddress)) {
-        throw new Error(`Route router not allowlisted: ${bestRoute.protocol.routerAddress}`);
-      }
-
-      const feeTier = bestRoute
-        ? bestRoute.feeTier
-        : getOptimalFee(tokenFrom.address, tokenTo.address);
-      validateFeeTier(feeTier);
-
-      logger.info(`Fee tier selected: ${feeTier} (${(feeTier / 10000) * 100}%)`);
-
-      // FlashLoanSimple requires repay in the SAME asset. Path must round-trip:
-      //   tokenFrom → tokenTo → tokenFrom  (2 hops, same fee tier for simplicity)
-      const path = encodePath(
-        [tokenFrom.address, tokenTo.address, tokenFrom.address],
-        [feeTier, feeTier]
-      );
-
-      if (
-        !validatePath(
-          [tokenFrom.address, tokenTo.address, tokenFrom.address],
-          [feeTier, feeTier]
-        )
-      ) {
-        throw new Error('Invalid round-trip swap path');
-      }
-      logger.info(
-        `Round-trip path for flash repay: ${tokenFrom.symbol} → ${tokenTo.symbol} → ${tokenFrom.symbol}`
-      );
-
-      // In dynamic flash-loan mode, amountIn and minAmountOut are sentinels —
-      // FlashSizer inside the bridge will compute the actual optimal loan size
-      // from live Aave liquidity and a fresh DEX quote at that exact amount.
-      const sentinelAmount = probeAmount;
-
-      // Optional: short-lived DEX-trade watcher for the output token (confirmation / MEV noise)
-      let tradeWatch: { unsubscribe: () => void } | undefined;
-      if (bitquery.configured) {
-        tradeWatch = bitquery.subscribeDexTrades(
-          (t) => {
-            logger.info(
-              `DEX trade ${t.protocol || '?'}: sell ${t.sellAmount || '?'} ` +
-                `${t.sellToken || '?'} -> buy ${t.buyAmount || '?'} ${t.buyToken || '?'}` +
-                (t.txHash ? ` tx=${t.txHash.slice(0, 10)}...` : '')
-            );
-          },
-          {
-            token: tokenTo.address,
-            onError: (e) => logger.warn(`DEX trade stream: ${e.message}`),
-          }
-        );
-      }
-
-      // Execute via bridge (dynamic sizing happens inside bridge.executeFlashLoan)
-      logger.info('Executing flash loan via execution bridge (dynamic sizing)...');
+    let iteration = 0;
+    while (this.isRunning) {
+      iteration++;
+      logger.info(`\n=================== LOOP ITERATION #${iteration} ===================`);
       try {
-        const result = await this.executeWithRetry({
-          tokenIn: tokenFrom.address,
-          tokenOut: tokenTo.address,
-          amountIn: sentinelAmount, // overridden by FlashSizer inside the bridge
-          path,
-          minAmountOut: 0n, // overridden by FlashSizer inside the bridge
-          deadline: getDeadline(2), // ~120s for snipes (matches on-chain default)
-          estimatedProfit: 0n,
-          poolAddress: detectedPool,
-        });
+        await this.runSingleIteration();
+      } catch (error) {
+        logger.warn(
+          `Iteration #${iteration} outcome: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+
+      if (this.isRunning) {
+        logger.info(`Sleeping ${this.loopIntervalMs}ms before next iteration...`);
+        await new Promise((resolve) => setTimeout(resolve, this.loopIntervalMs));
+      }
+    }
+    logger.info('Bot loop stopped cleanly.');
+  }
+
+  /**
+   * Single iteration scan & trade execution
+   */
+  private async runSingleIteration(): Promise<void> {
+    // Bitquery: rank hot pairs + new pools against allowlist + Aave flash bases
+    logger.info('Discovering best sniping token set (Bitquery + allowlist)...');
+    const discovered = await getBestSnipeTokens();
+    const { Token0, Token1, set: tokenSet } = discovered;
+    const detectedPool = discovered.pool;
+
+    if (!Token0 || !Token1) {
+      throw new Error(
+        'Failed to detect allowlisted snipe tokens (check BITQUERY_TOKEN / ALLOWED_TOKENS)'
+      );
+    }
+    if (!isSnipePairAllowed(Token0.token.address, Token1.token.address)) {
+      throw new Error(`Pair not allowlisted: ${Token0.token.address} / ${Token1.token.address}`);
+    }
+    if (tokenSet.candidates.length) {
+      logger.info(`Top snipe candidates (${tokenSet.candidates.length}):`);
+      for (const c of tokenSet.candidates.slice(0, 5)) {
+        logger.info(
+          `  #${c.rank} score=${c.score.toFixed(1)} ${c.baseSymbol ?? c.baseToken.slice(0, 8)}→${
+            c.targetSymbol ?? c.targetToken.slice(0, 8)
+          } [${c.source}] trades=${c.tradeCount ?? 0}`
+        );
+      }
+    }
+    if (detectedPool) {
+      logger.info(`Pool address from Bitquery: ${detectedPool}`);
+    }
+    if (discovered.fee !== undefined) {
+      logger.info(`Pool fee tier from event: ${discovered.fee}`);
+    }
+
+    const walletAddress = await signer.getAddress();
+
+    // Orient: flash borrow base (Aave) → target listing
+    let tokenFromObj = Token0;
+    let tokenToObj = Token1;
+
+    if (isFlashBaseToken(Token1.token.address) && !isFlashBaseToken(Token0.token.address)) {
+      tokenFromObj = Token1;
+      tokenToObj = Token0;
+    } else if (isFlashBaseToken(Token0.token.address)) {
+      tokenFromObj = Token0;
+      tokenToObj = Token1;
+    } else if (
+      AAVE_FLASH_BASE_TOKENS.map((t) => t.toLowerCase()).includes(
+        Token1.token.address.toLowerCase()
+      )
+    ) {
+      tokenFromObj = Token1;
+      tokenToObj = Token0;
+    } else {
+      const bal0 = await Token0.contract.balanceOf(walletAddress);
+      const bal1 = await Token1.contract.balanceOf(walletAddress);
+      if (bal0 === 0n && bal1 > 0n) {
+        tokenFromObj = Token1;
+        tokenToObj = Token0;
+      }
+    }
+
+    const tokenFrom = tokenFromObj.token;
+    const tokenTo = tokenToObj.token;
+
+    logger.info(
+      `Target Snipe Direction: ${tokenFrom.symbol} (${tokenFrom.address}) → ${tokenTo.symbol} (${tokenTo.address})`
+    );
+
+    // Validate wallet balances
+    const walletBalance = await provider.getBalance(walletAddress);
+    logger.info(`Wallet ETH balance: ${ethers.formatEther(walletBalance)} ETH`);
+
+    const tokenBalance = await tokenFromObj.contract.balanceOf(walletAddress);
+    logger.info(
+      `Input token balance: ${ethers.formatUnits(tokenBalance, tokenFrom.decimals)} ${tokenFrom.symbol}`
+    );
+
+    // Flash loans require zero upfront capital — no balance check needed.
+    logger.info('Flash-loan mode: skipping wallet token balance check (no capital required)');
+
+    // Multi-DEX Path Finding — query with a 1-token sentinel to discover the best fee tier.
+    logger.info('Discovering best Uniswap V3 fee tier (allowlisted router only)...');
+    const dexAggregator = new DEXAggregator(provider, EXECUTION_VENUE_PROTOCOLS);
+    const probeAmount = ethers.parseUnits('1', tokenFrom.decimals);
+    const bestRoute = await dexAggregator.findBestRoute(
+      tokenFrom.address,
+      tokenTo.address,
+      probeAmount
+    );
+    if (bestRoute && !isRouterAllowed(bestRoute.protocol.routerAddress)) {
+      throw new Error(`Route router not allowlisted: ${bestRoute.protocol.routerAddress}`);
+    }
+
+    const feeTier = bestRoute
+      ? bestRoute.feeTier
+      : getOptimalFee(tokenFrom.address, tokenTo.address);
+    validateFeeTier(feeTier);
+
+    logger.info(`Fee tier selected: ${feeTier} (${(feeTier / 10000) * 100}%)`);
+
+    // FlashLoanSimple requires repay in the SAME asset. Path must round-trip:
+    //   tokenFrom → tokenTo → tokenFrom  (2 hops, same fee tier for simplicity)
+    const path = encodePath(
+      [tokenFrom.address, tokenTo.address, tokenFrom.address],
+      [feeTier, feeTier]
+    );
+
+    if (
+      !validatePath([tokenFrom.address, tokenTo.address, tokenFrom.address], [feeTier, feeTier])
+    ) {
+      throw new Error('Invalid round-trip swap path');
+    }
+    logger.info(
+      `Round-trip path for flash repay: ${tokenFrom.symbol} → ${tokenTo.symbol} → ${tokenFrom.symbol}`
+    );
+
+    const sentinelAmount = probeAmount;
+
+    // Optional: short-lived DEX-trade watcher for the output token
+    let tradeWatch: { unsubscribe: () => void } | undefined;
+    if (bitquery.configured) {
+      tradeWatch = bitquery.subscribeDexTrades(
+        (t) => {
+          logger.info(
+            `DEX trade ${t.protocol || '?'}: sell ${t.sellAmount || '?'} ` +
+              `${t.sellToken || '?'} -> buy ${t.buyAmount || '?'} ${t.buyToken || '?'}` +
+              (t.txHash ? ` tx=${t.txHash.slice(0, 10)}...` : '')
+          );
+        },
+        {
+          token: tokenTo.address,
+          onError: (e) => logger.warn(`DEX trade stream: ${e.message}`),
+        }
+      );
+    }
+
+    // Execute via bridge (dynamic sizing happens inside bridge.executeFlashLoan)
+    logger.info('Executing flash loan via execution bridge (dynamic sizing)...');
+    try {
+      const result = await this.executeWithRetry({
+        tokenIn: tokenFrom.address,
+        tokenOut: tokenTo.address,
+        amountIn: sentinelAmount,
+        path,
+        minAmountOut: 0n,
+        deadline: getDeadline(2),
+        estimatedProfit: 0n,
+        poolAddress: detectedPool,
+      });
 
       if (!result.success) {
-          throw new Error(`Execution failed: ${result.error}`);
-        }
-
-        logger.info(`✓ Swap successful!`);
-        logger.info(`  Mode: ${result.mode}`);
-        logger.info(`  Tx: ${result.txHash}`);
-        logger.info(`  Gas: ${result.gasUsed?.toString()}`);
-        logger.info(`  Profit: ${ethers.formatUnits(result.profit || 0, 18)}`);
-      } finally {
-        tradeWatch?.unsubscribe();
+        throw new Error(`Execution failed: ${result.error}`);
       }
-    } catch (error) {
-      logger.error(`Bot failed: ${error instanceof Error ? error.message : String(error)}`);
-      process.exit(1);
+
+      logger.info(`✓ Swap successful!`);
+      logger.info(`  Mode: ${result.mode}`);
+      logger.info(`  Tx: ${result.txHash}`);
+      logger.info(`  Gas: ${result.gasUsed?.toString()}`);
+      logger.info(`  Profit: ${ethers.formatUnits(result.profit || 0, 18)}`);
+    } finally {
+      tradeWatch?.unsubscribe();
     }
   }
 
@@ -333,16 +350,15 @@ class SniperBot {
       provider
     );
 
-    const [sOwner, sRouter, flashAllowed, minBits, fOwner, fExec, fPool] =
-      await Promise.all([
-        sniper.owner() as Promise<string>,
-        sniper.swapRouter() as Promise<string>,
-        sniper.allowedExecutors(FLASH_LOAN_RECEIVER_ADDRESS) as Promise<boolean>,
-        sniper.minAmountBitLength() as Promise<bigint>,
-        flash.owner() as Promise<string>,
-        flash.swapExecutor() as Promise<string>,
-        flash.lendingPool() as Promise<string>,
-      ]);
+    const [sOwner, sRouter, flashAllowed, minBits, fOwner, fExec, fPool] = await Promise.all([
+      sniper.owner() as Promise<string>,
+      sniper.swapRouter() as Promise<string>,
+      sniper.allowedExecutors(FLASH_LOAN_RECEIVER_ADDRESS) as Promise<boolean>,
+      sniper.minAmountBitLength() as Promise<bigint>,
+      flash.owner() as Promise<string>,
+      flash.swapExecutor() as Promise<string>,
+      flash.lendingPool() as Promise<string>,
+    ]);
 
     if (sRouter.toLowerCase() !== SWAP_ROUTER_ADDRESS.toLowerCase()) {
       throw new Error(
@@ -388,22 +404,26 @@ class SniperBot {
  * Main entry point
  */
 async function main() {
-  try {
-    // Contract addresses are validated in config.ts - use checksummed versions
-    const config: Config = {
-      sniperSearcherAddress: SNIPER_SEARCHER_ADDRESS,
-      flashLoanReceiverAddress: FLASH_LOAN_RECEIVER_ADDRESS,
-      delegatedExecutorAddress: DELEGATED_EXECUTOR_ADDRESS,
-      maxRetries: 3,
-      retryDelayMs: 2000,
-    };
+  const config: Config = {
+    sniperSearcherAddress: SNIPER_SEARCHER_ADDRESS,
+    flashLoanReceiverAddress: FLASH_LOAN_RECEIVER_ADDRESS,
+    delegatedExecutorAddress: DELEGATED_EXECUTOR_ADDRESS,
+    maxRetries: 3,
+    retryDelayMs: 2000,
+  };
 
-    const bot = new SniperBot(config);
-    await bot.run();
-  } catch (error) {
-    logger.error(`Fatal error: ${error instanceof Error ? error.message : String(error)}`);
-    process.exit(1);
-  }
+  const bot = new SniperBot(config);
+
+  process.on('SIGINT', () => {
+    logger.info('Received SIGINT — stopping bot...');
+    bot.stop();
+  });
+  process.on('SIGTERM', () => {
+    logger.info('Received SIGTERM — stopping bot...');
+    bot.stop();
+  });
+
+  await bot.runLoop();
 }
 
 main().catch((error) => {

@@ -70,14 +70,12 @@ export class EIP7702TestHarness {
       test.logs.push(`Balance: ${ethers.formatEther(balance)} ETH`);
 
       const minRequired = ethers.parseEther('0.1');
-      test.passed = (balance >= minRequired);
+      test.passed = balance >= minRequired;
 
       if (test.passed) {
         test.logs.push(`✅ Balance sufficient for testing`);
       } else {
-        test.logs.push(
-          `❌ Balance insufficient (need ${ethers.formatEther(minRequired)} ETH)`
-        );
+        test.logs.push(`❌ Balance insufficient (need ${ethers.formatEther(minRequired)} ETH)`);
       }
     } catch (error) {
       test.logs.push(`❌ Error: ${error}`);

@@ -21,13 +21,9 @@ export async function getEip1559Fees(opts?: {
   const maxMul = opts?.maxMultiplier ?? 120; // percent of base estimate
 
   const fee = await provider.getFeeData();
-  const tip =
-    fee.maxPriorityFeePerGas ??
-    ethers.parseUnits('0.01', 'gwei');
+  const tip = fee.maxPriorityFeePerGas ?? ethers.parseUnits('0.01', 'gwei');
 
-  let maxFee =
-    fee.maxFeePerGas ??
-    ((fee.gasPrice ?? tip * 2n) * BigInt(maxMul)) / 100n;
+  let maxFee = fee.maxFeePerGas ?? ((fee.gasPrice ?? tip * 2n) * BigInt(maxMul)) / 100n;
 
   const scaledTip = (tip * BigInt(Math.floor(tipMul * 100))) / 100n;
   if (maxFee < scaledTip) {

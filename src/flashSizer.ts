@@ -74,8 +74,8 @@ export interface SizerConfig {
 
 const DEFAULT_CONFIG: SizerConfig = {
   maxBorrowCap: ethers.MaxUint256,
-  maxSlippageBps: 50,  // 0.50 % — hard ceiling, never violated
-  minProfitBps: 10,    // 0.10 % net profit floor after fee + slippage
+  maxSlippageBps: parseInt(process.env.MAX_SLIPPAGE_BPS || '50', 10), // 0.50 % — hard ceiling, never violated
+  minProfitBps: parseInt(process.env.MIN_PROFIT_BPS || '10', 10), // 0.10 % net profit floor after fee + slippage
   tokenDecimals: 18,
 };
 
@@ -99,7 +99,7 @@ export class FlashSizer {
 
   constructor(config: Partial<SizerConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
-        this.dexAggregator = new DEXAggregator(provider);
+    this.dexAggregator = new DEXAggregator(provider);
   }
 
   // ─── Public API ────────────────────────────────────────────────────────────
@@ -126,30 +126,24 @@ export class FlashSizer {
 
     // 1. Fetch on-chain liquidity
     const availableLiquidity = await this.fetchAvailableLiquidity(tokenIn);
-    if ((availableLiquidity <= 0)) {
+    if (availableLiquidity <= 0) {
       logger.warn(`[FlashSizer] No liquidity available for ${tokenIn}`);
       return null;
     }
 
     const decimals = this.config.tokenDecimals ?? 18;
-    logger.info(
-      `  Aave liquidity: ${ethers.formatUnits(availableLiquidity, decimals)}`
-    );
+    logger.info(`  Aave liquidity: ${ethers.formatUnits(availableLiquidity, decimals)}`);
+
+    const minLoanWei = decimals === 6 ? ethers.parseUnits('1', 6) : ethers.parseUnits('0.0001', decimals);
 
     // 2. Apply caps (Aave fraction + hard max)
-    const liquidityCap = BigInt(
-      (availableLiquidity * MAX_LIQUIDITY_FRACTION_BPS) / BPS_DENOM
-    );
+    const liquidityCap = BigInt((availableLiquidity * MAX_LIQUIDITY_FRACTION_BPS) / BPS_DENOM);
     let upperBound = this.minBN(liquidityCap, this.config.maxBorrowCap);
 
     // 2b. Bitquery pool depth at target slippage (pre-trade gate)
     const pool = opts?.poolAddress || this.config.poolAddress;
     if (pool && bitquery.configured) {
-      const maxIn = await bitquery.maxInputAtSlippage(
-        pool,
-        tokenIn,
-        this.config.maxSlippageBps
-      );
+      const maxIn = await bitquery.maxInputAtSlippage(pool, tokenIn, this.config.maxSlippageBps);
       if (maxIn) {
         try {
           // Bitquery MaxAmountIn is typically a decimal string of token units.
@@ -160,7 +154,7 @@ export class FlashSizer {
           } else {
             dexCap = BigInt(maxIn);
           }
-          if ((dexCap > 0)) {
+          if (dexCap > 0) {
             logger.info(
               `  Bitquery MaxAmountIn@${this.config.maxSlippageBps}bps: ` +
                 `${ethers.formatUnits(dexCap, decimals)}`
@@ -169,9 +163,7 @@ export class FlashSizer {
           }
         } catch (e) {
           logger.warn(
-            `  Bitquery depth parse skipped: ${
-              e instanceof Error ? e.message : String(e)
-            }`
+            `  Bitquery depth parse skipped: ${e instanceof Error ? e.message : String(e)}`
           );
         }
       } else {
@@ -192,7 +184,7 @@ export class FlashSizer {
       }
     }
 
-    if ((upperBound < MIN_LOAN_WEI)) {
+    if (upperBound < minLoanWei) {
       logger.warn(
         `[FlashSizer] Upper bound ${ethers.formatUnits(upperBound, decimals)} below min loan threshold`
       );
@@ -200,22 +192,22 @@ export class FlashSizer {
     }
 
     logger.info(
-      `  Search range: [${ethers.formatUnits(MIN_LOAN_WEI, decimals)}, ` +
-      `${ethers.formatUnits(upperBound, decimals)}]`
+      `  Search range: [${ethers.formatUnits(minLoanWei, decimals)}, ` +
+        `${ethers.formatUnits(upperBound, decimals)}]`
     );
 
     // 3 & 4. Binary / step search (round-trip quotes)
-    const result = await this.binarySearch(tokenIn, midToken, upperBound, availableLiquidity);
+    const result = await this.binarySearch(tokenIn, midToken, upperBound, availableLiquidity, minLoanWei);
 
     if (!result) {
       logger.warn(`[FlashSizer] No profitable, slippage-safe size found`);
     } else {
       logger.info(
         `[FlashSizer] ✓ Optimal loan: ` +
-        `${ethers.formatUnits(result.amount, decimals)} ` +
-        `| fee: ${ethers.formatUnits(result.fee, decimals)} ` +
-        `| net profit: ${ethers.formatUnits(result.netProfit, decimals)} ` +
-        `| via ${result.dexName}`
+          `${ethers.formatUnits(result.amount, decimals)} ` +
+          `| fee: ${ethers.formatUnits(result.fee, decimals)} ` +
+          `| net profit: ${ethers.formatUnits(result.netProfit, decimals)} ` +
+          `| via ${result.dexName}`
       );
     }
 
@@ -232,9 +224,10 @@ export class FlashSizer {
     tokenIn: string,
     tokenOut: string,
     upperBound: bigint,
-    availableLiquidity: bigint
+    availableLiquidity: bigint,
+    minLoanWei: bigint
   ): Promise<SizedLoan | null> {
-    const lo0 = MIN_LOAN_WEI;
+    const lo0 = minLoanWei;
     const stepSize = (upperBound - lo0) / BigInt(SEARCH_STEPS);
 
     // Coarse scan — probe SEARCH_STEPS equally spaced amounts plus the ceiling
@@ -248,7 +241,7 @@ export class FlashSizer {
 
     for (const candidate of candidates) {
       const result = await this.evaluateSize(tokenIn, tokenOut, candidate, availableLiquidity);
-      if (result && (!bestResult || (result.amount > bestResult.amount))) {
+      if (result && (!bestResult || result.amount > bestResult.amount)) {
         bestResult = result;
       }
     }
@@ -260,8 +253,8 @@ export class FlashSizer {
     let hi = upperBound;
 
     for (let iter = 0; iter < 8; iter++) {
-      const mid = ((lo + hi) / 2n);
-      if ((mid <= lo)) break;
+      const mid = (lo + hi) / 2n;
+      if (mid <= lo) break;
 
       const result = await this.evaluateSize(tokenIn, tokenOut, mid, availableLiquidity);
       if (result) {
@@ -293,17 +286,12 @@ export class FlashSizer {
     if (amount > availableLiquidity) return null;
 
     // Round-trip quote — amountOut is back in tokenIn units (repay asset)
-    const route = await this.dexAggregator.findBestRoundTripRoute(
-      tokenIn,
-      midToken,
-      amount
-    );
+    const route = await this.dexAggregator.findBestRoundTripRoute(tokenIn, midToken, amount);
     if (!route || route.amountOut <= 0n) return null;
 
     const expectedOutput = route.amountOut;
 
-    const slippageDeduction =
-      (expectedOutput * BigInt(this.config.maxSlippageBps)) / 10000n;
+    const slippageDeduction = (expectedOutput * BigInt(this.config.maxSlippageBps)) / 10000n;
     const minAmountOut = expectedOutput - slippageDeduction;
 
     const fee = (amount * FLASH_FEE_BPS) / BPS_DENOM;
@@ -313,8 +301,7 @@ export class FlashSizer {
     if (minAmountOut <= repayment) return null;
 
     const netProfit = minAmountOut - repayment;
-    const minProfitRequired =
-      (amount * BigInt(this.config.minProfitBps)) / BPS_DENOM;
+    const minProfitRequired = (amount * BigInt(this.config.minProfitBps)) / BPS_DENOM;
     if (netProfit < minProfitRequired) return null;
 
     return {
@@ -353,7 +340,7 @@ export class FlashSizer {
   }
 
   private minBN(a: bigint, b: bigint): bigint {
-    return (a < b) ? a : b;
+    return a < b ? a : b;
   }
 }
 

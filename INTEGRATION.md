@@ -132,7 +132,9 @@ async function executeSnipe() {
 
   // 6. Withdraw profit
   const balance = await executor.getBalance(tokenTo.address);
-  console.log(`💰 Profit: ${ethers.utils.formatUnits(balance, tokenTo.decimals)} ${tokenTo.symbol}`);
+  console.log(
+    `💰 Profit: ${ethers.utils.formatUnits(balance, tokenTo.decimals)} ${tokenTo.symbol}`
+  );
 
   const withdrawResult = await executor.withdraw(tokenTo.address, walletAddress);
   console.log(`Withdrawn to: ${walletAddress}`);
@@ -281,7 +283,7 @@ SniperExecutor.withdraw()
   - Token transfer: ~50k
   - Approve: ~50k
   - Uniswap swap: ~50-100k (depends on route complexity)
-  
+
 - **withdraw()**: ~50-70k gas
   - Token transfer: ~50k
   - Write to storage: ~10-20k
@@ -354,21 +356,25 @@ console.log(`Simulating: ${formatPath(tokens, fees)}`);
 ## Troubleshooting
 
 ### "No route found"
+
 - Token pair doesn't have liquidity
 - Fee tier mismatch (try [500, 3000, 10000])
 - Wait for more liquidity after pool creation
 
 ### "Insufficient output"
+
 - Sandwich attack occurred
 - Slippage too low
 - Pool moved while tx pending
 
 ### "Gas estimation failed"
+
 - Contract not deployed at address
 - Searcher contract owner ≠ signer
 - RPC endpoint timeout
 
 ### "Transaction failed"
+
 - Insufficient ETH for gas
 - Approval failed
 - Deadline passed

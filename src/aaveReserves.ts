@@ -5,10 +5,8 @@ import { Contract, type Provider } from 'ethers';
 import { provider as defaultProvider } from './config';
 
 export const AAVE_POOL_ARBITRUM = '0x794a61358D6845594F94dc1DB02A252b5b4814aD';
-export const AAVE_POOL_ADDRESSES_PROVIDER =
-  '0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb';
-export const AAVE_UI_POOL_DATA_PROVIDER =
-  '0x91E04cf78e53aEBe609e8a7f2003e7EECD743F2B';
+export const AAVE_POOL_ADDRESSES_PROVIDER = '0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb';
+export const AAVE_UI_POOL_DATA_PROVIDER = '0x91E04cf78e53aEBe609e8a7f2003e7EECD743F2B';
 
 const UI_ABI = [
   'function getReservesData(address provider) view returns (tuple(string underlyingAsset, string name, string symbol, uint256 decimals, uint256 baseLTVasCollateral, uint256 reserveLiquidationThreshold, uint256 reserveLiquidationBonus, uint256 reserveFactor, bool usageAsCollateralEnabled, bool borrowingEnabled, bool stableBorrowRateEnabled, bool isActive, bool isFrozen, uint128 liquidityIndex, uint128 variableBorrowIndex, uint128 liquidityRate, uint128 variableBorrowRate, uint128 stableBorrowRate, uint40 lastUpdateTimestamp, address aTokenAddress, address stableDebtTokenAddress, address variableDebtTokenAddress, address interestRateStrategyAddress, uint256 availableLiquidity, uint256 totalPrincipalStableDebt, uint256 averageStableRate, uint256 stableDebtLastUpdateTimestamp, uint256 totalScaledVariableDebt, uint256 priceInMarketReferenceCurrency, address priceOracle, uint256 variableRateSlope1, uint256 variableRateSlope2, uint256 stableRateSlope1, uint256 stableRateSlope2, uint256 baseStableBorrowRate, uint256 baseVariableBorrowRate, uint256 optimalUsageRatio, bool isPaused, bool isSiloedBorrowing, uint128 accruedToTreasury, uint128 unbacked, uint128 isolationModeTotalDebt, bool flashLoanEnabled)[] , tuple(uint256 marketReferenceCurrencyUnit, int256 marketReferenceCurrencyPriceInUsd, int256 networkBaseTokenPriceInUsd, uint8 networkBaseTokenPriceDecimals))',
@@ -37,7 +35,6 @@ export type ReserveSummary = {
   aTokenAddress: string;
 };
 
-/** Best-effort: prefer aToken.balanceOf(pool) for available liquidity. */
 export async function getAvailableLiquidity(
   asset: string,
   p: Provider = defaultProvider
@@ -45,8 +42,8 @@ export async function getAvailableLiquidity(
   const pool = new Contract(AAVE_POOL_ARBITRUM, POOL_ABI, p);
   try {
     const data = await pool.getReserveData(asset);
-    const aToken = new Contract(data.aTokenAddress as string, ERC20_ABI, p);
-    return BigInt(await aToken.balanceOf(AAVE_POOL_ARBITRUM));
+    const underlying = new Contract(asset, ERC20_ABI, p);
+    return BigInt(await underlying.balanceOf(data.aTokenAddress as string));
   } catch {
     return 0n;
   }
@@ -63,8 +60,8 @@ export async function getReserveEligibility(
     if (!aTokenAddr || aTokenAddr === '0x0000000000000000000000000000000000000000') {
       return { eligible: false, reason: 'Not an Aave V3 Arbitrum reserve' };
     }
-    const aToken = new Contract(aTokenAddr, ERC20_ABI, p);
-    const liquidity = BigInt(await aToken.balanceOf(AAVE_POOL_ARBITRUM));
+    const underlying = new Contract(asset, ERC20_ABI, p);
+    const liquidity = BigInt(await underlying.balanceOf(aTokenAddr));
     // configuration bit packing: flashLoanEnabled is bit 63 in Aave V3
     const configuration = BigInt(data.configuration);
     const flashLoanEnabled = ((configuration >> 63n) & 1n) === 1n;
@@ -86,16 +83,12 @@ export async function getReserveEligibility(
     // Fail closed: RPC/decode errors must not mark a reserve flashable.
     return {
       eligible: false,
-      reason: `Reserve eligibility check failed: ${
-        e instanceof Error ? e.message : String(e)
-      }`,
+      reason: `Reserve eligibility check failed: ${e instanceof Error ? e.message : String(e)}`,
     };
   }
 }
 
-export async function getFlashLoanPremiumBps(
-  p: Provider = defaultProvider
-): Promise<number> {
+export async function getFlashLoanPremiumBps(p: Provider = defaultProvider): Promise<number> {
   const pool = new Contract(AAVE_POOL_ARBITRUM, POOL_ABI, p);
   try {
     return Number(await pool.FLASHLOAN_PREMIUM_TOTAL());

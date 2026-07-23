@@ -7,12 +7,12 @@
 
 ## Deployed Contracts
 
-| Contract | Address | Notes |
-|----------|---------|--------|
-| SniperSearcher | `0xAC7465949D3178C9F13d629c6417b2a02D50DdC8` | minAmountBitLength=0 |
-| DelegatedExecutor | `0xc7a5B0873CB174A78017A66b541B24be64fBAde4` | minAmountBitLength=0 |
-| FlashLoanReceiver | `0xdce71b4f28dcc5686B3B4e8790bD6051345A89b8` | swapExecutor=Sniper, pool=Aave V3 |
-| BEBE | `0x00000000BEBEDB7C30ee418158e26E31a5A8f3E2` | canonical CREATE2 (not redeployed) |
+| Contract          | Address                                      | Notes                              |
+| ----------------- | -------------------------------------------- | ---------------------------------- |
+| SniperSearcher    | `0xAC7465949D3178C9F13d629c6417b2a02D50DdC8` | minAmountBitLength=0               |
+| DelegatedExecutor | `0xc7a5B0873CB174A78017A66b541B24be64fBAde4` | minAmountBitLength=0               |
+| FlashLoanReceiver | `0xdce71b4f28dcc5686B3B4e8790bD6051345A89b8` | swapExecutor=Sniper, pool=Aave V3  |
+| BEBE              | `0x00000000BEBEDB7C30ee418158e26E31a5A8f3E2` | canonical CREATE2 (not redeployed) |
 
 ## Owner
 

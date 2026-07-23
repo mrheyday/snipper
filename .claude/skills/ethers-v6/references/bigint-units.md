@@ -29,16 +29,16 @@ value1.toNumber()                      Number(value1)             // may lose pr
 ## Unit conversion
 
 ```typescript
-import { formatEther, parseEther, formatUnits, parseUnits } from "ethers";
+import { formatEther, parseEther, formatUnits, parseUnits } from 'ethers';
 
 // Ether-specific (18 decimals) — most common for native ETH amounts
-const wei: bigint = parseEther("1.5");       // 1500000000000000000n
-const asString: string = formatEther(wei);    // "1.5"
+const wei: bigint = parseEther('1.5'); // 1500000000000000000n
+const asString: string = formatEther(wei); // "1.5"
 
 // General-purpose — pass a decimal count or a known unit name
-const raw: bigint = parseUnits("1000", 9);     // -> 1000000000000n  (9 decimals, e.g. gwei-scale)
-const gwei: bigint = parseUnits("1", "gwei");  // -> 1000000000n
-const display: string = formatUnits(raw, 9);   // -> "1000.0"
+const raw: bigint = parseUnits('1000', 9); // -> 1000000000000n  (9 decimals, e.g. gwei-scale)
+const gwei: bigint = parseUnits('1', 'gwei'); // -> 1000000000n
+const display: string = formatUnits(raw, 9); // -> "1000.0"
 
 // Real-world: converting an ERC-20 balance using the token's own `decimals()`
 const decimals: bigint = await tokenContract.decimals(); // note: bigint, not number
@@ -53,8 +53,8 @@ const human = formatUnits(balance, decimals); // formatUnits accepts bigint or n
 For fixed-point decimal math that doesn't fit the plain-integer `bigint` model (e.g. displaying/accumulating fractional values with controlled precision), `FixedNumber` is still available in v6 — it wasn't replaced by `bigint`, since `bigint` only handles integers.
 
 ```typescript
-import { FixedNumber } from "ethers";
-const a = FixedNumber.fromString("1.23456", "fixed128x18");
+import { FixedNumber } from 'ethers';
+const a = FixedNumber.fromString('1.23456', 'fixed128x18');
 ```
 
 Reach for this only when integer/wei-scale math genuinely doesn't fit — for token amounts, `parseUnits`/`formatUnits` + `bigint` is almost always the right tool.

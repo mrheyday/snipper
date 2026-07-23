@@ -50,6 +50,7 @@ await nonceManager.confirmTransaction(nonce);
 ### 1. Automatic Nonce Allocation
 
 **Get next sequential nonce:**
+
 ```typescript
 const nonce1 = nonceManager.getNextNonce(); // Returns 0, increments to 1
 const nonce2 = nonceManager.getNextNonce(); // Returns 1, increments to 2
@@ -57,6 +58,7 @@ const nonce3 = nonceManager.getNextNonce(); // Returns 2, increments to 3
 ```
 
 **Get current nonce without incrementing:**
+
 ```typescript
 const current = nonceManager.getCurrentNonce(); // Returns 3, doesn't increment
 ```
@@ -64,6 +66,7 @@ const current = nonceManager.getCurrentNonce(); // Returns 3, doesn't increment
 ### 2. Transaction Tracking
 
 **Track submitted transactions:**
+
 ```typescript
 nonceManager.trackTransaction(nonce, txHash);
 
@@ -77,11 +80,13 @@ nonceManager.trackTransaction(nonce, txHash);
 ```
 
 **Mark as confirmed:**
+
 ```typescript
 await nonceManager.confirmTransaction(nonce);
 ```
 
 **Mark as failed (enables retry):**
+
 ```typescript
 const canRetry = await nonceManager.markTransactionFailed(nonce);
 if (canRetry) {
@@ -100,6 +105,7 @@ if (canRetry) {
 ### 3. Pending Transaction Monitoring
 
 **Check status of all pending transactions:**
+
 ```typescript
 const status = await nonceManager.checkPendingTransactions();
 
@@ -114,6 +120,7 @@ const status = await nonceManager.checkPendingTransactions();
 ### 4. Nonce State Recovery
 
 **Recover from gaps or dropped transactions:**
+
 ```typescript
 const recovery = await nonceManager.recoverNonceState();
 
@@ -130,6 +137,7 @@ const recovery = await nonceManager.recoverNonceState();
 ### 5. Transaction History
 
 **Get all tracked transactions:**
+
 ```typescript
 const history = nonceManager.getTransactionHistory();
 // Returns: PendingTransaction[]
@@ -143,6 +151,7 @@ const history = nonceManager.getTransactionHistory();
 ```
 
 **Get specific transaction:**
+
 ```typescript
 const tx = nonceManager.getTransaction(2);
 if (tx) {
@@ -153,6 +162,7 @@ if (tx) {
 ### 6. Cleanup Old Transactions
 
 **Remove old confirmed/failed transactions (older than 1 hour):**
+
 ```typescript
 const cleaned = nonceManager.cleanupOldTransactions();
 console.log(`Cleaned up ${cleaned} transactions`);
@@ -161,6 +171,7 @@ console.log(`Cleaned up ${cleaned} transactions`);
 ### 7. Statistics & Monitoring
 
 **Get nonce statistics:**
+
 ```typescript
 const stats = nonceManager.getStatistics();
 // {
@@ -174,6 +185,7 @@ const stats = nonceManager.getStatistics();
 ```
 
 **Log state:**
+
 ```typescript
 nonceManager.logState();
 // Logs:
@@ -432,6 +444,7 @@ logger.info(`Cleaned ${cleaned} old transactions`);
 **Symptoms**: Transaction not mined after 60 seconds
 
 **Recovery**:
+
 ```typescript
 // Check and handle
 const status = await nonceManager.checkPendingTransactions();
@@ -453,6 +466,7 @@ if (status.dropped.includes(nonce)) {
 **Symptoms**: On-chain nonce jumped (e.g., 0, 1, 3 - skipped 2)
 
 **Recovery**:
+
 ```typescript
 // Recover state
 const recovery = await nonceManager.recoverNonceState();
@@ -467,6 +481,7 @@ const nextNonce = nonceManager.getCurrentNonce(); // Safe to use
 **Symptoms**: Transaction failed 3 times
 
 **Action**:
+
 ```typescript
 const canRetry = await nonceManager.markTransactionFailed(nonce);
 if (!canRetry) {
@@ -492,6 +507,7 @@ if (!canRetry) {
 ### Alerts
 
 Set up alerts for:
+
 - Pending transactions > 5
 - Failed transactions > 2
 - Dropped nonces (nonce gaps)

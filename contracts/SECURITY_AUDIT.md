@@ -1,10 +1,11 @@
 # Security Audit Report
+
 ## Arbitrum MEV Sniper Bot Smart Contracts
 
 **Audit Date:** 2026-07-22  
 **Auditor:** Claude Code Security Review Specialist  
 **Solidity Version:** 0.8.36 / EVM: Osaka  
-**Scope:** SniperSearcher, FlashLoanReceiver, DelegatedExecutor  
+**Scope:** SniperSearcher, FlashLoanReceiver, DelegatedExecutor
 
 ---
 
@@ -14,13 +15,13 @@ A comprehensive security audit was conducted on three core contracts of the Arbi
 
 ### Key Findings Overview
 
-| Severity | Count | Status |
-|----------|-------|--------|
-| CRITICAL | 1 | Requires Fix |
-| HIGH | 2 | Requires Fix |
-| MEDIUM | 3 | Requires Fix |
-| LOW | 2 | Recommended |
-| INFO | 1 | Note |
+| Severity | Count | Status       |
+| -------- | ----- | ------------ |
+| CRITICAL | 1     | Requires Fix |
+| HIGH     | 2     | Requires Fix |
+| MEDIUM   | 3     | Requires Fix |
+| LOW      | 2     | Recommended  |
+| INFO     | 1     | Note         |
 
 **Overall Risk Assessment:** HIGH - Do not deploy to production without addressing CRITICAL and HIGH findings.
 
@@ -90,7 +91,7 @@ function executeSwapWithCallback(
     bytes calldata callbackData  // Attacker-controlled
   ) external returns (uint256 amountOut) {
     // ... swap execution ...
-    
+
     // VULNERABILITY: Arbitrary call with attacker data
     if (callbackData.length > 0) {
       _executeCallback(callbackData, amountOut);  // Line 90
@@ -119,12 +120,14 @@ In EIP-7702 delegation context (where this contract's code runs as the delegated
 #### Proof of Concept
 
 See `test/SecurityAudit.t.sol`:
+
 - `test_PoC_DelegatedExecutor_ArbitraryCallback()`
 - `test_PoC_DelegatedExecutor_CallbackReentrancy()`
 
 #### Remediation
 
 1. **Add reentrancy guard using transient storage (0.8.28+):**
+
 ```solidity
 bytes32 private transient locked;
 
@@ -139,6 +142,7 @@ function executeSwapWithCallback(...) external nonReentrant { ... }
 ```
 
 2. **Validate callback target:**
+
 ```solidity
 function _executeCallback(bytes calldata callbackData) internal {
     // Whitelist allowed function selectors
@@ -155,6 +159,7 @@ function _executeCallback(bytes calldata callbackData) internal {
 3. **Alternative: Remove callback feature** if not essential to core functionality.
 
 #### References
+
 - CWE-94: Improper Control of Generation of Code
 - OWASP: Reentrancy
 - EIP-7702 security considerations
@@ -195,6 +200,7 @@ function executeSwap(
 4. Original victim transaction gets worse slippage
 
 Alternatively, if contract holds funds:
+
 1. Attacker calls `executeBatchSwaps` with the contract's internal tokens
 2. Receives output tokens
 3. Drains contract holdings
@@ -202,6 +208,7 @@ Alternatively, if contract holds funds:
 #### Proof of Concept
 
 See `test/SecurityAudit.t.sol`:
+
 - `test_PoC_DelegatedExecutor_MissingAccessControl()`
 - `test_DelegatedExecutor_BatchSwapNoValidation()`
 
@@ -209,9 +216,9 @@ See `test/SecurityAudit.t.sol`:
 function test_PoC_DelegatedExecutor_MissingAccessControl() public {
     uint256 amountIn = 100e18;
     bytes memory path = abi.encodePacked(address(tokenA), address(tokenB));
-    
+
     tokenA.mint(address(executor), amountIn);
-    
+
     // ATTACKER CAN CALL THIS WITHOUT AUTHORIZATION
     vm.prank(attacker);
     executor.executeSwap(address(tokenA), amountIn, path, 0, block.timestamp + 300);
@@ -271,6 +278,7 @@ function executeSwap(
 ```
 
 #### References
+
 - CWE-276: Incorrect Default Permissions
 - OWASP: Broken Access Control
 
@@ -296,7 +304,7 @@ function executeOperation(
     bytes calldata params
 ) external returns (bytes32) {
     // ... validation ...
-    
+
     // Call swapExecutor (which is SniperSearcher)
     uint256 amountOut = ISwapExecutor(swapExecutor).executeSwap(
       asset,
@@ -319,7 +327,7 @@ function executeSwap(
 ) external onlyOwner returns (uint256 amountOut) {
     // Only owner can call!
     if (msg.sender != owner) revert Unauthorized();  // Line 51
-    
+
     // Expects to pull from msg.sender
     IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), amountIn);  // Line 78
 }
@@ -340,6 +348,7 @@ Current tests use a **mock router** (`address(this)`) instead of real `SniperSea
 #### Proof of Concept
 
 See `test/SecurityAudit.t.sol`:
+
 - `test_PoC_FlashLoanReceiver_BrokenIntegration()`
 
 #### Remediation
@@ -403,6 +412,7 @@ constructor(address _swapRouter, address _flashLoanReceiver) {
 ```
 
 #### References
+
 - CWE-636: Not Cleaning Up After Exception
 - OWASP: Exception Handling Issues
 
@@ -420,12 +430,14 @@ constructor(address _swapRouter, address _flashLoanReceiver) {
 The `FlashLoanReceiver` contract has **no test suite**. The callback mechanism (the most critical security-sensitive function) is completely untested.
 
 **Test Summary:**
+
 - SniperSearcher: 7 tests ✓
 - DelegatedExecutor: 4 tests ✓
 - FlashLoanReceiver: 0 tests ❌
 - Total: 17 tests (audit PoCs included)
 
 Critical untested functions:
+
 1. `initiateFlashLoan()` - Entry point
 2. `executeOperation()` - Callback from lending pool
 3. Flash loan + swap integration
@@ -450,30 +462,30 @@ contract FlashLoanReceiverTest is Test {
   MockLendingPool public lendingPool;
   MockSwapExecutor public swapExecutor;
   ERC20Mock public token;
-  
+
   function setUp() public {
     lendingPool = new MockLendingPool();
     swapExecutor = new MockSwapExecutor();
     flashReceiver = new FlashLoanReceiver(address(swapExecutor), address(lendingPool));
     token = new ERC20Mock("Test", "TST", 18);
   }
-  
+
   function test_FlashLoan_Success() public {
     // Test successful flash loan flow
   }
-  
+
   function test_FlashLoan_InsufficientRepayment() public {
     // Test repayment validation
   }
-  
+
   function test_FlashLoan_PremiumCalculation() public {
     // Test 0.09% (9 bps) premium
   }
-  
+
   function test_FlashLoan_UnauthorizedCaller() public {
     // Test access control
   }
-  
+
   function test_ExecuteOperation_InvalidInitiator() public {
     // Test initiator validation
   }
@@ -481,6 +493,7 @@ contract FlashLoanReceiverTest is Test {
 ```
 
 #### References
+
 - OWASP: Insufficient Testing
 - CWE-1104: Use of Unmaintained Third Party Components
 
@@ -503,10 +516,10 @@ function executeOperation(..., bytes calldata params) external returns (bytes32)
       params,
       (address, bytes, uint256, address)
     );
-    
+
     require(token == asset, 'Token mismatch');
     require(initiator == address(this), 'Initiator mismatch');
-    
+
     // recipient variable is NEVER USED
     uint256 amountOut = ISwapExecutor(swapExecutor).executeSwap(
       asset,
@@ -514,7 +527,7 @@ function executeOperation(..., bytes calldata params) external returns (bytes32)
       swapPath,
       minAmountOut
     );
-    
+
     // Profit goes to owner, not recipient
     emit FlashLoanExecuted(asset, amount, premium, ...);
 }
@@ -569,6 +582,7 @@ function _executeCallback(bytes calldata callbackData, uint256 amountOut) intern
 ```
 
 Called from:
+
 ```solidity
 if (callbackData.length > 0) {
   _executeCallback(callbackData, amountOut);  // Line 90
@@ -762,12 +776,14 @@ emit FlashLoanExecuted(asset, amount, premium, profitUSD);
 ## Security Checklist
 
 ### Access Control
+
 - [x] Owner/admin functions protected with modifiers
 - [ ] **DelegatedExecutor functions missing access control** ❌
 - [x] Event log on critical operations
 - [ ] **No signature-based authorization for delegated functions** ❌
 
 ### Input Validation
+
 - [x] Minimum slippage checked
 - [x] Deadline validation
 - [x] Path encoding validation (`path.length >= 20`)
@@ -775,23 +791,27 @@ emit FlashLoanExecuted(asset, amount, premium, profitUSD);
 - [ ] **Callback data not validated** ❌
 
 ### External Interactions
+
 - [x] SafeERC20 for token transfers
 - [x] Try-catch for router calls
 - [ ] **FlashLoanReceiver/SniperSearcher integration broken** ❌
 - [x] Proper error messages with custom errors
 
 ### State Management
+
 - [ ] **No reentrancy guard on callback** ❌
 - [x] Event emissions on state changes
 - [x] Immutable deployment parameters
 
 ### Token Safety
+
 - [x] Uses SafeERC20.forceApprove
 - [x] Approval resets via safeTransfer
 - [x] Emergency withdrawal functions
 - [x] No approval before transferFrom
 
 ### Testing
+
 - [x] Unit tests for happy path
 - [x] Access control tests
 - [x] Fuzz tests for edge cases
@@ -913,21 +933,25 @@ modifier nonReentrant() {
 ## References & Standards
 
 ### Solidity Documentation
+
 - [Solidity 0.8.36](https://docs.soliditylang.org/en/v0.8.36/)
 - [SafeERC20](https://docs.openzeppelin.com/contracts/4.x/api/token/erc20)
 - [Custom Errors](https://docs.soliditylang.org/en/v0.8.36/contracts.html#errors)
 
 ### Security Standards
+
 - [OWASP Top 10 Smart Contracts](https://cheatsheetseries.owasp.org/cheatsheets/Smart_Contract_Security_Cheat_Sheet.html)
 - [CWE Top 25](https://cwe.mitre.org/top25/)
 - [Consensys Best Practices](https://github.com/ConsenSys/smart-contract-best-practices)
 
 ### EVM/Arbitrum Specific
+
 - [EIP-7702: Set EOA Account Code](https://eips.ethereum.org/EIPS/eip-7702)
 - [Arbitrum Documentation](https://docs.arbitrum.io/)
 - [Uniswap V3 Router](https://github.com/Uniswap/v3-periphery)
 
 ### Foundry References
+
 - [Foundry Book - Testing](https://book.getfoundry.sh/forge/writing-tests)
 - [forge test - Gas Reports](https://book.getfoundry.sh/reference/forge/forge-test#--gas-report)
 
@@ -936,6 +960,7 @@ modifier nonReentrant() {
 ## Audit Scope Limitations
 
 This audit covered:
+
 - ✓ Source code review of three main contracts
 - ✓ Foundry compilation and linting
 - ✓ Test suite execution and coverage analysis
@@ -943,6 +968,7 @@ This audit covered:
 - ✓ Gas optimization review
 
 This audit **did not** cover:
+
 - ✗ Arbitrum L2-specific vulnerabilities (assumed standard EVM)
 - ✗ Flash loan provider (AAVE) behavior verification
 - ✗ Uniswap V3 router security (assumed trusted)
@@ -958,7 +984,7 @@ This audit **did not** cover:
 The Arbitrum MEV sniper bot contracts show good foundational security practices (SafeERC20, custom errors, emergency functions) but have **three critical flaws that must be addressed before production deployment**:
 
 1. **CRITICAL:** Arbitrary callback execution enables contract drain
-2. **HIGH:** Missing access control on DelegatedExecutor allows unauthorized function calls  
+2. **HIGH:** Missing access control on DelegatedExecutor allows unauthorized function calls
 3. **HIGH:** FlashLoanReceiver integration is broken, callback will always fail
 
 Additionally, **complete lack of FlashLoanReceiver test coverage** is a significant risk for production use of flash loan functionality.
@@ -972,18 +998,18 @@ Additionally, **complete lack of FlashLoanReceiver test coverage** is a signific
 
 ## Audit Sign-Off
 
-| Item | Status |
-|------|--------|
-| Code Review | Complete |
-| Test Coverage Analysis | Complete |
-| PoC Development | Complete |
-| Recommendations | Complete |
-| Final Assessment | NEEDS FIXES |
+| Item                   | Status      |
+| ---------------------- | ----------- |
+| Code Review            | Complete    |
+| Test Coverage Analysis | Complete    |
+| PoC Development        | Complete    |
+| Recommendations        | Complete    |
+| Final Assessment       | NEEDS FIXES |
 
 **Recommendation:** Address all CRITICAL and HIGH findings before any mainnet deployment. HIGH-priority items should be tested thoroughly on testnet (Arbitrum Sepolia) before mainnet release.
 
 ---
 
-*Report Generated: 2026-07-22*  
-*Auditor: Claude Code Security Specialist*  
-*Confidence Level: High (backed by test PoCs)*
+_Report Generated: 2026-07-22_  
+_Auditor: Claude Code Security Specialist_  
+_Confidence Level: High (backed by test PoCs)_

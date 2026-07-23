@@ -28,10 +28,7 @@ function parse(file) {
       const i = v.indexOf(' #');
       if (i >= 0) v = v.slice(0, i).trim();
     }
-    if (
-      (v.startsWith('"') && v.endsWith('"')) ||
-      (v.startsWith("'") && v.endsWith("'"))
-    ) {
+    if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
       v = v.slice(1, -1);
     }
     if (!keys.has(m[1])) order.push(m[1]);
@@ -228,9 +225,11 @@ console.log('');
 if (blockers.length) {
   console.log('NOT READY — fill required empty keys:');
   for (const k of blockers) console.log('  - ' + k);
-  if (blockers.includes('SNIPER_SEARCHER_ADDRESS') ||
-      blockers.includes('FLASH_LOAN_RECEIVER_ADDRESS') ||
-      blockers.includes('DELEGATED_EXECUTOR_ADDRESS')) {
+  if (
+    blockers.includes('SNIPER_SEARCHER_ADDRESS') ||
+    blockers.includes('FLASH_LOAN_RECEIVER_ADDRESS') ||
+    blockers.includes('DELEGATED_EXECUTOR_ADDRESS')
+  ) {
     console.log('');
     console.log('Deploy contracts first, then paste addresses:');
     console.log('  forge script script/Deploy.s.sol --rpc-url arbitrum --broadcast --verify');

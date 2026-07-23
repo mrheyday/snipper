@@ -1,13 +1,7 @@
 /**
  * Aave V3 lending ops via ethers v6 (no @aave/contract-helpers).
  */
-import {
-  Contract,
-  MaxUint256,
-  parseUnits,
-  type Provider,
-  type Signer,
-} from 'ethers';
+import { Contract, MaxUint256, parseUnits, type Provider, type Signer } from 'ethers';
 import { signer } from './config';
 import { Logger } from './logger';
 import { AAVE_POOL_ARBITRUM } from './aaveReserves';
@@ -151,12 +145,7 @@ export class AaveLending {
       const hashes: string[] = [];
       const approveHash = await this.ensureApprove(reserveAddress, amount);
       if (approveHash) hashes.push(approveHash);
-      const tx = await this.pool.repay(
-        reserveAddress,
-        amount,
-        rateMode(interestRateMode),
-        user
-      );
+      const tx = await this.pool.repay(reserveAddress, amount, rateMode(interestRateMode), user);
       const receipt = await tx.wait(1);
       if (!receipt || receipt.status === 0) {
         return { success: false, txHashes: hashes, error: 'repay reverted' };

@@ -6,14 +6,14 @@
 
 ## Deployed addresses
 
-| Contract | Address |
-|----------|---------|
-| SniperSearcher | `0xAC7465949D3178C9F13d629c6417b2a02D50DdC8` |
+| Contract          | Address                                      |
+| ----------------- | -------------------------------------------- |
+| SniperSearcher    | `0xAC7465949D3178C9F13d629c6417b2a02D50DdC8` |
 | FlashLoanReceiver | `0xdce71b4f28dcc5686B3B4e8790bD6051345A89b8` |
 | DelegatedExecutor | `0xc7a5B0873CB174A78017A66b541B24be64fBAde4` |
-| BEBE (canonical) | `0x00000000BEBEDB7C30ee418158e26E31a5A8f3E2` |
-| SwapRouter02 | `0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45` |
-| Aave V3 Pool | `0x794a61358D6845594F94dc1DB02A252b5b4814aD` |
+| BEBE (canonical)  | `0x00000000BEBEDB7C30ee418158e26E31a5A8f3E2` |
+| SwapRouter02      | `0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45` |
+| Aave V3 Pool      | `0x794a61358D6845594F94dc1DB02A252b5b4814aD` |
 
 Selectors below are from the verified Solidity sources (solc 0.8.36 / via-ir).
 
@@ -120,7 +120,7 @@ Auth: empty opData requires `msg.sender == address(this)` (7702 self-call).
 
 **Example: EOA calls FlashLoanReceiver.initiateFlashLoan via BEBE**
 
-1. Auth list → BEBE  
+1. Auth list → BEBE
 2. `to = EOA`, `data = execute(mode, abi.encode([{ to: FlashLoanReceiver, value: 0, data: initiateFlashLoan_calldata }]))`
 
 ### `isValidSignature(bytes32,bytes)` → `0x1626ba7e`

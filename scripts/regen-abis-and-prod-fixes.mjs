@@ -12,7 +12,8 @@ const artifacts = {
   SNIPER_SEARCHER_ABI: 'contracts/out/SniperSearcher.sol/SniperSearcher.json',
   FLASH_LOAN_RECEIVER_ABI: 'contracts/out/FlashLoanReceiver.sol/FlashLoanReceiver.json',
   DELEGATED_EXECUTOR_ABI: 'contracts/out/DelegatedExecutor.sol/DelegatedExecutor.json',
-  BEBE_BASIC_EOA_BATCH_EXECUTOR_ABI: 'contracts/out/BasicEOABatchExecutor.sol/BasicEOABatchExecutor.json',
+  BEBE_BASIC_EOA_BATCH_EXECUTOR_ABI:
+    'contracts/out/BasicEOABatchExecutor.sol/BasicEOABatchExecutor.json',
 };
 let out = [
   '/**',

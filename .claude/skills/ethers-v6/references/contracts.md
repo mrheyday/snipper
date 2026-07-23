@@ -3,14 +3,14 @@
 ## Instantiation
 
 ```typescript
-import { Contract } from "ethers";
+import { Contract } from 'ethers';
 
 const abi = [
-  "function decimals() view returns (uint8)",
-  "function symbol() view returns (string)",
-  "function balanceOf(address a) view returns (uint)",
-  "function transfer(address to, uint amount) returns (bool)",
-  "event Transfer(address indexed from, address indexed to, uint amount)"
+  'function decimals() view returns (uint8)',
+  'function symbol() view returns (string)',
+  'function balanceOf(address a) view returns (uint)',
+  'function transfer(address to, uint amount) returns (bool)',
+  'event Transfer(address indexed from, address indexed to, uint amount)',
 ];
 
 // Read-only: pass a Provider
@@ -38,10 +38,10 @@ const receipt = await tx.wait(); // ContractTransactionReceipt | null
 Every contract method also exposes sub-methods for lower-level control:
 
 ```typescript
-await contract.transfer.staticCall(to, amount);        // simulate without sending — needs only read access
-await contract.transfer.estimateGas(to, amount);        // -> bigint
+await contract.transfer.staticCall(to, amount); // simulate without sending — needs only read access
+await contract.transfer.estimateGas(to, amount); // -> bigint
 await contract.transfer.populateTransaction(to, amount); // -> TransactionRequest (unsent, unsigned)
-contract.transfer.fragment;                              // -> FunctionFragment (ABI metadata)
+contract.transfer.fragment; // -> FunctionFragment (ABI metadata)
 ```
 
 `staticCall` is the v6 way to do a pre-flight "would this revert?" check (e.g. before committing to a real transaction in a sniping/arbitrage flow) — it works against a Provider-connected contract, no signer required, since it never touches state.
@@ -57,7 +57,7 @@ const contractAsOther = contract.connect(otherSignerOrProvider);
 ## ContractFactory (deployment)
 
 ```typescript
-import { ContractFactory } from "ethers";
+import { ContractFactory } from 'ethers';
 
 const factory = new ContractFactory(abi, bytecode, signer);
 const deployed = await factory.deploy(...constructorArgs);
@@ -88,7 +88,7 @@ const events = await contract.queryFilter(filter, fromBlock?, toBlock?);
 
 ## Gotchas
 
-- A method call resolves the *ABI-decoded return value* for `view`/`pure` functions, not a transaction — don't `.wait()` on it.
+- A method call resolves the _ABI-decoded return value_ for `view`/`pure` functions, not a transaction — don't `.wait()` on it.
 - Overloaded functions (same name, different params) need explicit selection: `contract["transfer(address,uint256)"](...)`.
 - If a write call reverts, ethers throws a `CallExceptionError` (`.code === "CALL_EXCEPTION"`) with `.reason`/`.data` populated when decodable — catch and inspect `.code`/`.reason`, not the raw message string.
 - `tx.wait()` resolves to `null` only if you pass `confirms: 0` and the tx isn't yet mined; with the default of 1 confirmation it either resolves to a receipt or throws/hangs — don't assume a truthy check is unnecessary.

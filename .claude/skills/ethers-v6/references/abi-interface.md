@@ -5,7 +5,7 @@
 ## Creating an Interface
 
 ```typescript
-import { Interface } from "ethers";
+import { Interface } from 'ethers';
 
 const iface = new Interface(abi); // Human-Readable string[] or JSON ABI array
 // or, if you already have an Interface/ABI value of unknown shape:
@@ -15,17 +15,17 @@ const iface2 = Interface.from(value);
 ## Encoding calldata
 
 ```typescript
-const data: string = iface.encodeFunctionData("transfer", [to, amount]);
+const data: string = iface.encodeFunctionData('transfer', [to, amount]);
 // data is ready to drop straight into a TransactionRequest.data field
 
-const decodedArgs = iface.decodeFunctionData("transfer", txData); // -> Result (array-like + named access)
+const decodedArgs = iface.decodeFunctionData('transfer', txData); // -> Result (array-like + named access)
 ```
 
 ## Decoding return data / errors
 
 ```typescript
-const result = iface.decodeFunctionResult("balanceOf", rawReturnedBytes); // -> Result
-const errorInfo = iface.decodeErrorResult("SomeCustomError", revertData);  // -> Result
+const result = iface.decodeFunctionResult('balanceOf', rawReturnedBytes); // -> Result
+const errorInfo = iface.decodeErrorResult('SomeCustomError', revertData); // -> Result
 ```
 
 For most call-and-decode flows, prefer letting `Contract` do this for you (`contracts.md`) — reach for raw `Interface` methods when you're not going through a `Contract` object at all.
@@ -48,12 +48,12 @@ if (parsed) {
 Only needed for encoding/decoding raw Solidity types outside the context of a specific function call (e.g. hashing struct data for EIP-712, or building non-standard calldata):
 
 ```typescript
-import { AbiCoder } from "ethers";
+import { AbiCoder } from 'ethers';
 
 const coder = AbiCoder.defaultAbiCoder(); // shared singleton
 
-const encoded: string = coder.encode(["uint256", "address"], [amount, addr]);
-const decoded = coder.decode(["uint256", "address"], data);
+const encoded: string = coder.encode(['uint256', 'address'], [amount, addr]);
+const decoded = coder.decode(['uint256', 'address'], data);
 ```
 
 ## Gotchas

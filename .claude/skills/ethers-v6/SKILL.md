@@ -14,6 +14,7 @@ Source of truth: https://docs.ethers.org/v6/single-page/ (verified against v6.17
 ## The single most important v6 change
 
 **`BigNumber` is gone.** All integer values (balances, gas, token amounts) are native ES2020 `bigint`. This cascades into everything:
+
 - Literals use the `n` suffix: `1000n`, not `BigNumber.from(1000)`.
 - Arithmetic uses real operators: `a + b`, `a * b`, `a >= b` — not `.add()`, `.mul()`, `.gte()`.
 - `typeof value === "bigint"`, and `JSON.stringify` will throw on it unless you convert first.
@@ -25,16 +26,16 @@ Second most important change: **flat imports.** Everything is exported directly 
 
 Read the relevant file before writing non-trivial code in that area — each covers the real constructor signatures, method behavior, and gotchas, not just a happy-path snippet.
 
-| Topic | File | Covers |
-|---|---|---|
-| Providers | `references/providers.md` | JsonRpcProvider, BrowserProvider, WebSocketProvider, FallbackProvider, network detection, polling, events |
-| Contracts | `references/contracts.md` | Contract instantiation, read/write calls, `staticCall`, `populateTransaction`, ContractFactory, filters/events, `queryFilter` |
-| Wallets & Signers | `references/wallets-signers.md` | Wallet, HDNodeWallet, mnemonics, signMessage/signTransaction/signTypedData, connecting to a provider, VoidSigner |
-| BigInt & units | `references/bigint-units.md` | bigint arithmetic, formatEther/parseEther, formatUnits/parseUnits, FixedNumber |
-| ABI & Interface | `references/abi-interface.md` | Interface, AbiCoder, encodeFunctionData/decodeFunctionResult, parseLog, Human-Readable ABI |
-| Transactions | `references/transactions.md` | TransactionRequest/Response/Receipt, estimateGas, EIP-1559 fee fields, `tx.wait()`, nonce handling |
-| Crypto & utils | `references/utils.md` | keccak256, id(), getAddress/isAddress, hexlify/getBytes, toUtf8Bytes, solidityPacked* |
-| v5 → v6 migration | `references/migration-v5-to-v6.md` | Side-by-side API diffs for every breaking change — the fastest way to translate existing v5 code |
+| Topic             | File                               | Covers                                                                                                                        |
+| ----------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| Providers         | `references/providers.md`          | JsonRpcProvider, BrowserProvider, WebSocketProvider, FallbackProvider, network detection, polling, events                     |
+| Contracts         | `references/contracts.md`          | Contract instantiation, read/write calls, `staticCall`, `populateTransaction`, ContractFactory, filters/events, `queryFilter` |
+| Wallets & Signers | `references/wallets-signers.md`    | Wallet, HDNodeWallet, mnemonics, signMessage/signTransaction/signTypedData, connecting to a provider, VoidSigner              |
+| BigInt & units    | `references/bigint-units.md`       | bigint arithmetic, formatEther/parseEther, formatUnits/parseUnits, FixedNumber                                                |
+| ABI & Interface   | `references/abi-interface.md`      | Interface, AbiCoder, encodeFunctionData/decodeFunctionResult, parseLog, Human-Readable ABI                                    |
+| Transactions      | `references/transactions.md`       | TransactionRequest/Response/Receipt, estimateGas, EIP-1559 fee fields, `tx.wait()`, nonce handling                            |
+| Crypto & utils    | `references/utils.md`              | keccak256, id(), getAddress/isAddress, hexlify/getBytes, toUtf8Bytes, solidityPacked*                                         |
+| v5 → v6 migration | `references/migration-v5-to-v6.md` | Side-by-side API diffs for every breaking change — the fastest way to translate existing v5 code                              |
 
 ## Working conventions
 

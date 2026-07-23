@@ -174,10 +174,7 @@ export class EIP7702Integration {
 
   async runDiagnostics(): Promise<void> {
     logger.info('Running comprehensive EIP-7702 diagnostics...');
-    const harness = new EIP7702TestHarness(
-      this.providerUrl,
-      this.signer.privateKey
-    );
+    const harness = new EIP7702TestHarness(this.providerUrl, this.signer.privateKey);
     const results = await harness.runFullTestSuite();
     this.debugger.printDebugReport();
     const passed = results.filter((r) => r.passed).length;

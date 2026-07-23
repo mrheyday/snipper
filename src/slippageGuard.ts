@@ -53,8 +53,8 @@ export class SlippageGuard {
     expectedOutput: bigint,
     slippageBps: number = this.config.maxSlippageBps
   ): bigint {
-    const slippageAmount = expectedOutput * BigInt(slippageBps) / BigInt(10000);
-    return (expectedOutput - slippageAmount);
+    const slippageAmount = (expectedOutput * BigInt(slippageBps)) / BigInt(10000);
+    return expectedOutput - slippageAmount;
   }
 
   /**
@@ -67,8 +67,8 @@ export class SlippageGuard {
     routerQuote: bigint
   ): SlippageAnalysis {
     const warnings: string[] = [];
-    const slippageAmount = (expectedOutput - routerQuote);
-    const slippageBps = slippageAmount * BigInt(10000) / BigInt(expectedOutput);
+    const slippageAmount = expectedOutput - routerQuote;
+    const slippageBps = (slippageAmount * BigInt(10000)) / BigInt(expectedOutput);
     const slippageNum = Number(slippageBps);
 
     const maxSlippageBps = this.emergencyMode
@@ -78,8 +78,8 @@ export class SlippageGuard {
     const isAcceptable = slippageNum <= maxSlippageBps;
 
     // Check price impact
-    const priceImpactAmount = (priceQuote - routerQuote);
-    const priceImpactBps = priceImpactAmount * BigInt(10000) / BigInt(priceQuote);
+    const priceImpactAmount = priceQuote - routerQuote;
+    const priceImpactBps = (priceImpactAmount * BigInt(10000)) / BigInt(priceQuote);
     const priceImpactNum = Number(priceImpactBps);
 
     if (priceImpactNum > this.config.maxPriceImpactBps) {
@@ -98,8 +98,8 @@ export class SlippageGuard {
     }
 
     // Check profit
-    const profit = (routerQuote - amountIn);
-    const profitBps = profit * BigInt(10000) / BigInt(amountIn);
+    const profit = routerQuote - amountIn;
+    const profitBps = (profit * BigInt(10000)) / BigInt(amountIn);
     const profitNum = Number(profitBps);
 
     if (profitNum < this.config.minProfitBps) {
@@ -163,8 +163,8 @@ export class SlippageGuard {
     const oldest = recentSnapshots[0];
     const newest = recentSnapshots[recentSnapshots.length - 1];
 
-    const priceChange = (newest.price - oldest.price);
-    const priceChangeBps = priceChange * BigInt(10000) / BigInt(Number(oldest.price));
+    const priceChange = newest.price - oldest.price;
+    const priceChangeBps = (priceChange * BigInt(10000)) / BigInt(Number(oldest.price));
 
     // Threshold in basis points (e.g., 200 = 2% sudden movement)
     return Math.abs(Number(priceChangeBps)) > threshold;
@@ -179,7 +179,7 @@ export class SlippageGuard {
   ): bigint {
     // Safe amount = liquidity * (maxSlippage / 10000n) * 0.1
     // Conservative: 10% of what slippage would allow
-    const safeAmount = totalLiquidity * BigInt(maxSlippageBps) / BigInt((10000) / 10);
+    const safeAmount = (totalLiquidity * BigInt(maxSlippageBps)) / BigInt(10000 / 10);
     return safeAmount;
   }
 
@@ -195,7 +195,7 @@ export class SlippageGuard {
     reason?: string;
     slippageBps: number;
   } {
-    const slippageAmount = (expectedOutput - minAmountOut);
+    const slippageAmount = expectedOutput - minAmountOut;
     const slippageBpsBn = expectedOutput === 0n ? 0n : (slippageAmount * 10000n) / expectedOutput;
     const slippageBps = Number(slippageBpsBn);
 
@@ -211,8 +211,8 @@ export class SlippageGuard {
       };
     }
 
-    const profit = (minAmountOut - amountIn);
-    if ((profit <= 0)) {
+    const profit = minAmountOut - amountIn;
+    if (profit <= 0) {
       return {
         isValid: false,
         reason: 'No profit after slippage',
@@ -273,7 +273,7 @@ export class SlippageGuard {
 
     if (recentSnapshots.length === 0) return null;
 
-    const sum = recentSnapshots.reduce((acc, s) => (acc + s.price), BigInt(0));
+    const sum = recentSnapshots.reduce((acc, s) => acc + s.price, BigInt(0));
     return sum / BigInt(recentSnapshots.length);
   }
 

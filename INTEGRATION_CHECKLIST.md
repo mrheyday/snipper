@@ -5,6 +5,7 @@
 Replace custom `DelegatedExecutor` deployment with pre-deployed `bebe` on Arbitrum:
 
 ### Step 1: Get bebe Contract Address
+
 ```bash
 # Repository: https://github.com/Vectorized/bebe
 # Type: ERC-7821 EOA Batch Executor (EIP-7702)
@@ -17,6 +18,7 @@ BEBE_ADDRESS=0x00000000BEBEDB7C30ee418158e26E31a5A8f3E2
 ```
 
 ### Step 2: Update .env (Arbitrum One production 2026-07-23)
+
 ```env
 # Core contracts (verified on Arbiscan)
 SNIPER_SEARCHER_ADDRESS=0xAC7465949D3178C9F13d629c6417b2a02D50DdC8
@@ -28,11 +30,13 @@ BATCH_EXECUTOR_ADDRESS=0x00000000BEBEDB7C30ee418158e26E31a5A8f3E2
 ```
 
 ### Step 3: Wiring
+
 - **DelegatedExecutor** → Uni-only swaps under 7702 (`executeSwap` selector `0x107db2c4`)
 - **BEBE** → multi-target `execute(bytes32,bytes)` selector `0xe9ae5c53` via `BatchEOAExecutor` / `encodeBatchExecute`
 - Do not set `DELEGATED_EXECUTOR_ADDRESS` to BEBE if you need the Uniswap-only path
 
 ### Step 4: Verify Integration
+
 ```bash
 # Test with bebe address
 npm run dev
@@ -43,16 +47,17 @@ npm run dev
 
 ## Execution Paths Comparison
 
-| Mode | Deployer | Address Source | Setup Cost | Gas Cost | Status |
-|------|----------|-----------------|-----------|----------|--------|
-| **Direct** | SniperSearcher | You | ~0.05 ETH | ~100-120k | ✅ Ready |
-| **Flash** | FlashLoanReceiver | You | ~0.05 ETH | ~140-160k | ✅ Ready |
-| **EIP-7702** | bebe (Vectorized) | **$0** | **$0** | ~100k | ✅ Ready |
-| **ERC-4337** | SmartWallet | You | ~0.02 ETH | ~120-150k | ✅ Ready |
+| Mode         | Deployer          | Address Source | Setup Cost | Gas Cost  | Status   |
+| ------------ | ----------------- | -------------- | ---------- | --------- | -------- |
+| **Direct**   | SniperSearcher    | You            | ~0.05 ETH  | ~100-120k | ✅ Ready |
+| **Flash**    | FlashLoanReceiver | You            | ~0.05 ETH  | ~140-160k | ✅ Ready |
+| **EIP-7702** | bebe (Vectorized) | **$0**         | **$0**     | ~100k     | ✅ Ready |
+| **ERC-4337** | SmartWallet       | You            | ~0.02 ETH  | ~120-150k | ✅ Ready |
 
 ## Testing Order
 
 1. **Deploy to Sepolia first** (testnet)
+
    ```bash
    # Set DELEGATED_EXECUTOR_ADDRESS to bebe Sepolia address
    npm run dev
@@ -60,12 +65,14 @@ npm run dev
    ```
 
 2. **Small swap test** (~$10 equivalent)
+
    ```bash
    # Via EIP-7702 path
    # Verify: Tx confirmed, no reverts
    ```
 
 3. **Profitability test** (~$50 equivalent)
+
    ```bash
    # Monitor gas vs profit
    # Verify: Profitable margin exists
@@ -115,34 +122,39 @@ npm run dev
 ## Benefits of bebe
 
 ✅ **No Deployment Cost**
+
 - Vectorized already deployed to all major networks
 - Immediately available, zero deployment gas
 
 ✅ **Optimized Gas Efficiency**
+
 - Hand-tuned bytecode reduction
 - Optimized callpaths for swaps
 
 ✅ **Battle-Tested Security**
+
 - Used by multiple production protocols
 - Professional audit + active maintenance
 
 ✅ **Active Community**
+
 - Updates + improvements
 - No maintenance burden on you
 
 ✅ **Atomic Execution**
+
 - All-or-nothing semantics
 - Prevents partial failures
 
 ## Troubleshooting
 
-| Issue | Solution |
-|-------|----------|
-| **Authorization fails** | Verify nonce matches current account state |
-| **Transaction reverts** | Check delegatee address is valid on-chain |
-| **Gas estimation fails** | Increase `callGasLimit` by 50% as conservative estimate |
-| **Rate limiting** | Use RateLimiter with exponential backoff (default 2 req/s) |
-| **Slippage violations** | Tighten minAmountOut bounds or adjust timeout |
+| Issue                    | Solution                                                   |
+| ------------------------ | ---------------------------------------------------------- |
+| **Authorization fails**  | Verify nonce matches current account state                 |
+| **Transaction reverts**  | Check delegatee address is valid on-chain                  |
+| **Gas estimation fails** | Increase `callGasLimit` by 50% as conservative estimate    |
+| **Rate limiting**        | Use RateLimiter with exponential backoff (default 2 req/s) |
+| **Slippage violations**  | Tighten minAmountOut bounds or adjust timeout              |
 
 ## References
 

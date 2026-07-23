@@ -2,7 +2,7 @@
 
 **Codebase**: Arbitrum MEV Sniper Bot  
 **Audit Date**: 2025-02-14  
-**Compliance Level**: Comprehensive  
+**Compliance Level**: Comprehensive
 
 ---
 
@@ -11,6 +11,7 @@
 This audit verifies all ERC and EIP standards referenced in the Arbitrum MEV sniper bot codebase. The codebase demonstrates **strong compliance** with ratified Ethereum standards, with proper implementation of critical standards for token handling, account abstraction, and transaction mechanics.
 
 **Key Findings:**
+
 - ✅ All 9 referenced standards are ratified/final OR consensus-reached
 - ✅ Interface implementations match official specifications
 - ✅ Proper use of SafeERC20 for ERC-20 compliance
@@ -36,11 +37,13 @@ This audit verifies all ERC and EIP standards referenced in the Arbitrum MEV sni
 **Implementation Status**: ✅ **FULLY IMPLEMENTED**
 
 **Usage in Codebase**:
+
 - Files: `contracts/src/DelegatedExecutor.sol`, `contracts/src/FlashLoanReceiver.sol`, `contracts/src/SniperSearcher.sol`, `src/abis.ts`
 - References: 89+ occurrences
 - Integration: SafeERC20 wrapper from OpenZeppelin
 
 **Interface Signatures Verified**:
+
 ```solidity
 function transfer(address to, uint256 value) external returns (bool)
 function approve(address spender, uint256 value) external returns (bool)
@@ -50,6 +53,7 @@ function allowance(address owner, address spender) external view returns (uint25
 ```
 
 **Compliance Notes**:
+
 - ✅ Uses `SafeERC20` from OpenZeppelin for safe transfer operations
 - ✅ Handles return value checks (SafeERC20 reverts on failure)
 - ✅ Proper approval pattern for token transfers
@@ -58,6 +62,7 @@ function allowance(address owner, address spender) external view returns (uint25
 - **No deviations from spec**
 
 **Key Implementations**:
+
 - `SafeERC20.safeTransferFrom()` - line 48, 77, 121 in DelegatedExecutor.sol
 - `SafeERC20.forceApprove()` - line 51, 78, 124 in DelegatedExecutor.sol
 - ERC20_ABI in src/abis.ts includes standard function signatures
@@ -74,6 +79,7 @@ function allowance(address owner, address spender) external view returns (uint25
 **Implementation Status**: ✅ **FULL IMPLEMENTATION - AWAITING HARDFORK**
 
 **Usage in Codebase**:
+
 - Files: `src/eip7702.ts`, `src/eip7702-improved.ts`, `contracts/src/DelegatedExecutor.sol`
 - References: 67 + 49 = 116 occurrences
 - Integration: Full reference implementation provided
@@ -84,22 +90,24 @@ function allowance(address owner, address spender) external view returns (uint25
 // Authorization Structure (from EIP-7702 spec)
 interface Authorization {
   chainId: BigNumber;
-  address: string;        // Delegatee contract
+  address: string; // Delegatee contract
   nonce: BigNumber;
-  yParity: number;        // Signature parity (0 or 1)
-  r: string;              // Signature component
-  s: string;              // Signature component
+  yParity: number; // Signature parity (0 or 1)
+  r: string; // Signature component
+  s: string; // Signature component
 }
 
 // Transaction Type: 4 (EIP-7702)
 ```
 
 **Classes Provided**:
+
 1. `EIP7702Authorizer` - Creates and signs authorization data
 2. `EIP7702Executor` - Executes swaps via delegated code
 3. `EIP7702TransactionBuilder` - Constructs SetCode transactions
 
 **Compliance Notes**:
+
 - ✅ Authorization hash structure follows EIP-7702 spec
 - ✅ Signature encoding uses proper (yParity, r, s) format
 - ✅ Supports batch swaps via `executeDelegatedBatchSwaps()`
@@ -110,6 +118,7 @@ interface Authorization {
 
 **Critical Implementation Detail**:
 Line 64-69 in eip7702.ts:
+
 ```typescript
 const authorizationHash = ethers.utils.keccak256(
   ethers.utils.solidityPack(
@@ -122,6 +131,7 @@ const authorizationHash = ethers.utils.keccak256(
 
 **Special Note**:
 The implementation correctly handles the authorization type-4 transaction structure, but actual submission to the network requires:
+
 - Ethereum client supporting EIP-7702 (post-Prague)
 - Provider able to construct type-4 transactions
 - This code is production-ready for future use
@@ -138,6 +148,7 @@ The implementation correctly handles the authorization type-4 transaction struct
 **Implementation Status**: ✅ **FULLY IMPLEMENTED**
 
 **Usage in Codebase**:
+
 - Files: `src/erc4337.ts`
 - References: 7 + 4 = 11 occurrences
 - Integration: SmartWallet + Bundler client classes
@@ -146,25 +157,27 @@ The implementation correctly handles the authorization type-4 transaction struct
 
 ```typescript
 interface UserOperation {
-  sender: string;                  // Smart wallet address
-  nonce: BigNumber;                // Account nonce
-  initCode: string;                // Wallet factory init code
-  callData: string;                // Execution calldata
-  callGasLimit: BigNumber;         // Gas for execution
+  sender: string; // Smart wallet address
+  nonce: BigNumber; // Account nonce
+  initCode: string; // Wallet factory init code
+  callData: string; // Execution calldata
+  callGasLimit: BigNumber; // Gas for execution
   verificationGasLimit: BigNumber; // Gas for validation
-  preVerificationGas: BigNumber;   // Gas for bundler overhead
-  maxFeePerGas: BigNumber;         // EIP-1559 max fee
+  preVerificationGas: BigNumber; // Gas for bundler overhead
+  maxFeePerGas: BigNumber; // EIP-1559 max fee
   maxPriorityFeePerGas: BigNumber; // EIP-1559 priority fee
-  paymasterAndData: string;        // Paymaster sponsor data
-  signature: string;               // Account signature
+  paymasterAndData: string; // Paymaster sponsor data
+  signature: string; // Account signature
 }
 ```
 
 **Classes Provided**:
+
 1. `ERC4337SmartWallet` - Creates and signs UserOperations
 2. `ERC4337BundlerClient` - Submits UserOps to bundler network
 
 **Compliance Notes**:
+
 - ✅ UserOperation structure matches ERC-4337 spec exactly
 - ✅ Proper gas field configuration (callGasLimit, verificationGasLimit, preVerificationGas)
 - ✅ EIP-1559 fee fields included
@@ -174,6 +187,7 @@ interface UserOperation {
 - **No deviations from spec**
 
 **EntryPoint Reference**:
+
 ```typescript
 constructor(walletAddress: string, entryPointAddress: string, chainId: number = 42161)
 // EntryPoint: The singleton contract coordinating validation and execution
@@ -181,6 +195,7 @@ constructor(walletAddress: string, entryPointAddress: string, chainId: number = 
 ```
 
 **Bundler Integration**:
+
 - Supports standard `eth_sendUserOperation` RPC method
 - Supports standard `eth_getUserOperationReceipt` RPC method
 - Compatible with production bundlers
@@ -197,11 +212,13 @@ constructor(walletAddress: string, entryPointAddress: string, chainId: number = 
 **Implementation Status**: 🟡 **REFERENCED** (External Integration)
 
 **Usage in Codebase**:
+
 - References: 4 occurrences
 - Context: "bebe" delegatee contract documentation
 - Files: `docs/EIP7702_EXTERNAL_DELEGATEE.md`
 
 **Specification Reference**:
+
 ```solidity
 function isValidSignature(bytes32 hash, bytes memory signature)
     external view returns (bytes4 magicValue);
@@ -210,11 +227,13 @@ function isValidSignature(bytes32 hash, bytes memory signature)
 
 **Usage Context**:
 Line 31 in docs/EIP7702_EXTERNAL_DELEGATEE.md states:
+
 > ERC-1271 signature validation (ecrecover)
 
 The "bebe" delegatee (0x00000000BEBEDB7C30ee418158e26E31a5A8f3E2) uses ERC-1271 for validating EOA signatures within the delegated execution context.
 
 **Compliance Notes**:
+
 - ✅ Referenced for signature validation in stateless delegatee
 - ✅ Uses standard magic value 0x1626ba7e for valid signatures
 - ✅ Fallback to ecrecover for EOA validation
@@ -232,11 +251,13 @@ The "bebe" delegatee (0x00000000BEBEDB7C30ee418158e26E31a5A8f3E2) uses ERC-1271 
 **Implementation Status**: ✅ **FULLY IMPLEMENTED**
 
 **Usage in Codebase**:
+
 - Files: `contracts/src/FlashLoanReceiver.sol`
 - References: 1 key implementation (line 125)
 - Integration: Aave V3 flash loan integration
 
 **Interface Signature**:
+
 ```solidity
 function executeOperation(
     address asset,
@@ -249,12 +270,14 @@ function executeOperation(
 
 **Compliance Verification**:
 Line 125 in FlashLoanReceiver.sol:
+
 ```solidity
 return keccak256('ERC3156FlashBorrower.onFlashLoan');
 // Returns: 0x439148f0bbc682ca079e46d6e2c2f0c3e758de20e2a339073cecbf15b9d63f08
 ```
 
 **Key Implementation Details**:
+
 - ✅ Correct callback function signature
 - ✅ Proper return value (magic value) indicating successful operation
 - ✅ Handles token transfers with SafeERC20
@@ -267,6 +290,7 @@ Line 48-49: `FLASH_LOAN_PREMIUM_RATE = 9` (0.09% or 9 basis points)
 This matches Aave V3 flash loan premium rate
 
 **Compliance Notes**:
+
 - ✅ Initiator check (must be contract itself)
 - ✅ Asset validation (must match borrowed token)
 - ✅ Approval for repayment to lending pool
@@ -284,11 +308,13 @@ This matches Aave V3 flash loan premium rate
 **Implementation Status**: ✅ **FULLY IMPLEMENTED**
 
 **Usage in Codebase**:
+
 - Files: `src/permit2.ts`
 - References: 1 primary (line 35)
 - Integration: Permit2 signature generation
 
 **Domain Separator Structure** (per EIP-712):
+
 ```typescript
 const domain = {
   name: 'Permit2',
@@ -301,6 +327,7 @@ const domain = {
 ```
 
 **Typed Data Structure**:
+
 ```typescript
 const types = {
   PermitDetails: [
@@ -318,6 +345,7 @@ const types = {
 ```
 
 **Compliance Verification**:
+
 - ✅ Domain separator includes name, version, chainId, and verifyingContract
 - ✅ Proper type definitions with full hierarchy
 - ✅ Uses ethers `_signTypedData` for EIP-712 signature
@@ -326,6 +354,7 @@ const types = {
 - **No deviations from spec**
 
 **Security Properties**:
+
 - ✅ Off-chain signature, no on-chain verification needed
 - ✅ Replay protection via chainId + nonce
 - ✅ Time-limited via sigDeadline (30-minute default)
@@ -343,21 +372,24 @@ const types = {
 **Implementation Status**: ✅ **FULLY IMPLEMENTED**
 
 **Usage in Codebase**:
+
 - Files: `src/validation.ts`
 - References: 2+ occurrences
 - Function: `validateAndChecksumAddress()`
 
 **Implementation** (lines 44-51):
+
 ```typescript
 export function validateAndChecksumAddress(address: string): string {
   if (!ethers.utils.isAddress(address)) {
     throw new Error(`Invalid Ethereum address: ${address}`);
   }
-  return ethers.utils.getAddress(address);  // EIP-55 checksum
+  return ethers.utils.getAddress(address); // EIP-55 checksum
 }
 ```
 
 **Checksum Algorithm** (per EIP-55):
+
 ```
 1. Take lowercase address: 0x5aAeb6053ba3EEdb6A475A1C25D7FB03E9B5b6E7
 2. Hash with keccak256: hash(lowercase)
@@ -368,6 +400,7 @@ export function validateAndChecksumAddress(address: string): string {
 ```
 
 **Compliance Notes**:
+
 - ✅ Uses ethers.utils.getAddress() which implements EIP-55
 - ✅ All contract addresses validated and checksummed
 - ✅ Used throughout codebase for address validation
@@ -375,6 +408,7 @@ export function validateAndChecksumAddress(address: string): string {
 - **No deviations from spec**
 
 **Usage Pattern**:
+
 - Called on all user-provided addresses (env vars, function parameters)
 - Returns either valid checksummed address or throws error
 - Critical for preventing address-based security issues
@@ -391,29 +425,33 @@ export function validateAndChecksumAddress(address: string): string {
 **Implementation Status**: 🟡 **REFERENCED** (Implicit in gas fields)
 
 **Usage in Codebase**:
+
 - Files: `src/erc4337.ts`, `contracts/delegatee-calldata.md`
 - References: 1-2 occurrences
 - Context: Gas pricing in UserOperations and transaction construction
 
 **EIP-1559 Fee Structure**:
+
 ```
 Transaction Fee = (baseFeePerGas + priorityFeePerGas) * gasUsed
 ```
 
 **Implementation in erc4337.ts** (lines 102-114):
+
 ```typescript
 const gasPrice = await provider.getGasPrice();
 const baseFee = (await provider.getBlock('latest')).baseFeePerGas || gasPrice;
 
 return {
   // ... other fields
-  maxFeePerGas: baseFee.mul(2),           // 2x current base fee
-  maxPriorityFeePerGas: ethers.utils.parseUnits('1', 'gwei'),  // 1 gwei priority
+  maxFeePerGas: baseFee.mul(2), // 2x current base fee
+  maxPriorityFeePerGas: ethers.utils.parseUnits('1', 'gwei'), // 1 gwei priority
   // ...
 };
 ```
 
 **Compliance Notes**:
+
 - ✅ Properly sets maxFeePerGas and maxPriorityFeePerGas
 - ✅ Base fee calculation includes buffer (2x multiplier)
 - ✅ Priority fee ensures transaction inclusion
@@ -422,6 +460,7 @@ return {
 - **Adjustments for Arbitrum**: Network-specific gas parameters handled by provider
 
 **Network-Specific Notes**:
+
 - Ethereum L1: Standard EIP-1559 with 21000 base units
 - Arbitrum: Modified EIP-1559 with layer 2 overhead (ArbGasInfo contract)
 - Implementation correctly delegates to provider for chain-specific handling
@@ -438,15 +477,18 @@ return {
 **Implementation Status**: 🔲 **REFERENCED ONLY** (External Implementation)
 
 **Usage in Codebase**:
+
 - References: 5 occurrences
 - Files: `docs/EIP7702_EXTERNAL_DELEGATEE.md`, `BEBE_INTEGRATION_SUMMARY.md`, `INTEGRATION_CHECKLIST.md`
 - Contract: Vectorized's bebe (0x00000000BEBEDB7C30ee418158e26E31a5A8f3E2)
 
 **Specification Context**:
+
 > ERC-7821 EOA Batch Executor for EIP-7702
 > Provides optimized, stateless batch execution for delegated operations
 
 **Documentation References**:
+
 ```markdown
 Line 10: **Type:** ERC-7821 EOA Batch Executor for EIP-7702
 Line 31: ERC-7821 EOA Batch Executor with ERC-1271 validation
@@ -454,6 +496,7 @@ Line 32: **Canonical Address:** 0x00000000BEBEDB7C30ee418158e26E31a5A8f3E2
 ```
 
 **Features Documented**:
+
 - ✅ Stateless design (no persistent storage)
 - ✅ Batch operation support (multiple swaps)
 - ✅ Signature validation via ERC-1271
@@ -461,6 +504,7 @@ Line 32: **Canonical Address:** 0x00000000BEBEDB7C30ee418158e26E31a5A8f3E2
 - ✅ Same address across all networks
 
 **Compliance Notes**:
+
 - ⚠️ ERC-7821 is not formally ratified as an Ethereum standard
 - ✅ Implementation (bebe) is audited and battle-tested
 - ✅ Source code available on GitHub (Vectorized/bebe)
@@ -468,12 +512,14 @@ Line 32: **Canonical Address:** 0x00000000BEBEDB7C30ee418158e26E31a5A8f3E2
 - **Status**: Recommended external delegatee for production use
 
 **Security Assessment**:
+
 - ✅ Open source and audited
 - ✅ Immutable contract (no upgrades)
 - ✅ No storage dependencies (pure function logic)
 - ✅ Community-maintained and battle-tested
 
 **Recommendation**:
+
 > For production MEV sniping, use bebe (0x00000000BEBEDB7C30ee418158e26E31a5A8f3E2)  
 > Benefits: No deployment cost, optimized gas, audited code
 
@@ -481,17 +527,17 @@ Line 32: **Canonical Address:** 0x00000000BEBEDB7C30ee418158e26E31a5A8f3E2
 
 ## Standards Compliance Matrix
 
-| Standard | Number | Status | Usage | Implementation | Ratified | Notes |
-|----------|--------|--------|-------|-----------------|----------|-------|
-| Token Standard | ERC-20 | ✅ IMPLEMENTED | 89x | SafeERC20 wrapper | ✅ FINAL | Production ready |
-| Set EOA Account Code | EIP-7702 | ✅ IMPLEMENTED | 116x | Full implementation | ✅ CONSENSUS | Ready post-Prague 2025 |
-| Account Abstraction | ERC-4337 | ✅ IMPLEMENTED | 11x | SmartWallet + Bundler | ✅ FINAL | Production ready |
-| Signature Validation | ERC-1271 | 🟡 REFERENCED | 4x | External (bebe) | ✅ FINAL | Delegatee only |
-| Flash Loans | ERC-3156 | ✅ IMPLEMENTED | 1x | Aave V3 receiver | ✅ FINAL | Production ready |
-| Typed Data Signing | EIP-712 | ✅ IMPLEMENTED | 1x | Permit2 handler | ✅ FINAL | Production ready |
-| Address Checksums | EIP-55 | ✅ IMPLEMENTED | 2x | Validation utility | ✅ FINAL | All addresses |
-| Dynamic Fees | EIP-1559 | 🟡 REFERENCED | 1x | UserOp gas fields | ✅ FINAL | Arbitrum compatible |
-| Batch Executor | ERC-7821 | 🔲 REFERENCED | 5x | External (bebe) | 🟡 DRAFT | Battle-tested reference |
+| Standard             | Number   | Status         | Usage | Implementation        | Ratified     | Notes                   |
+| -------------------- | -------- | -------------- | ----- | --------------------- | ------------ | ----------------------- |
+| Token Standard       | ERC-20   | ✅ IMPLEMENTED | 89x   | SafeERC20 wrapper     | ✅ FINAL     | Production ready        |
+| Set EOA Account Code | EIP-7702 | ✅ IMPLEMENTED | 116x  | Full implementation   | ✅ CONSENSUS | Ready post-Prague 2025  |
+| Account Abstraction  | ERC-4337 | ✅ IMPLEMENTED | 11x   | SmartWallet + Bundler | ✅ FINAL     | Production ready        |
+| Signature Validation | ERC-1271 | 🟡 REFERENCED  | 4x    | External (bebe)       | ✅ FINAL     | Delegatee only          |
+| Flash Loans          | ERC-3156 | ✅ IMPLEMENTED | 1x    | Aave V3 receiver      | ✅ FINAL     | Production ready        |
+| Typed Data Signing   | EIP-712  | ✅ IMPLEMENTED | 1x    | Permit2 handler       | ✅ FINAL     | Production ready        |
+| Address Checksums    | EIP-55   | ✅ IMPLEMENTED | 2x    | Validation utility    | ✅ FINAL     | All addresses           |
+| Dynamic Fees         | EIP-1559 | 🟡 REFERENCED  | 1x    | UserOp gas fields     | ✅ FINAL     | Arbitrum compatible     |
+| Batch Executor       | ERC-7821 | 🔲 REFERENCED  | 5x    | External (bebe)       | 🟡 DRAFT     | Battle-tested reference |
 
 ---
 
@@ -645,6 +691,7 @@ All standards have been verified through:
 **Overall Compliance**: 97/100
 
 **Breakdown**:
+
 - Standard Coverage: 20/20 ✅
 - Ratified Standards: 19/20 (95%) — EIP-7702 consensus, ERC-7821 ref impl
 - Interface Accuracy: 20/20 ✅
@@ -653,11 +700,13 @@ All standards have been verified through:
 - Gas Efficiency: 20/20 ✅
 
 **Deductions**:
+
 - -3: EIP-7702 awaits Prague hardfork (scheduled, not blocking)
 
 **Conclusion**: **PRODUCTION READY NOW** (3 modes) + **READY POST-PRAGUE** (4 modes with EIP-7702)
 
 **Timeline**:
+
 - Now: Direct, Flash Loan, ERC-4337 modes fully operational
 - Q1-Q2 2025: Prague hardfork → Add EIP-7702 mode
 - Post-2025: Four-mode production system
@@ -676,16 +725,19 @@ All standards have been verified through:
 ## Appendix: Standards References
 
 ### Primary References
+
 - https://eips.ethereum.org/ - Ethereum Improvement Proposals
 - https://github.com/ethereum/EIPs - Official EIP repository
 - https://github.com/Vectorized/bebe - bebe delegatee source
 
 ### Implementation References
+
 - OpenZeppelin Contracts: https://docs.openzeppelin.com/contracts/
 - ethers.js: https://docs.ethers.org/
 - Uniswap V3: https://docs.uniswap.org/
 
 ### Related Documentation
+
 - `PROPOSED_STANDARDS.md` - Detailed guide to proposed standards (EIP-7702, ERC-7821)
 - `docs/EIP7702_EXTERNAL_DELEGATEE.md` - External delegatee guide
 - `contracts/delegatee-calldata.md` - Calldata specifications

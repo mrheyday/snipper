@@ -10,8 +10,7 @@ import { validateAndChecksumAddress } from './validation';
 
 const logger = new Logger('EIP7702');
 
-const DEPRECATED_MSG =
-  'eip7702-improved is deprecated and unsafe. Import from ./eip7702 instead.';
+const DEPRECATED_MSG = 'eip7702-improved is deprecated and unsafe. Import from ./eip7702 instead.';
 
 /**
  * EIP-7702: Set EOA Account Code

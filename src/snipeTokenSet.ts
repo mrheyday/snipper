@@ -208,7 +208,7 @@ export async function discoverSnipeTokenSet(opts?: {
   await Promise.all(
     [...new Set([...acc.values()].map((c) => c.baseToken))].map(async (base) => {
       const elig = await getReserveEligibility(base);
-      baseLiq.set(base.toLowerCase(), elig.eligible ? elig.liquidity ?? 0n : 0n);
+      baseLiq.set(base.toLowerCase(), elig.eligible ? (elig.liquidity ?? 0n) : 0n);
       if (!elig.eligible) {
         logger.info(`Flash base ${base.slice(0, 10)}… not eligible: ${elig.reason}`);
       }

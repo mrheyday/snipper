@@ -65,7 +65,7 @@ export class FlashLoanCallbackHandler {
    * for production sizing — this default is a hint only.
    */
   calculateFlashLoanFee(amount: bigint, feeBasisPoints: number = 5): bigint {
-    return amount * BigInt(feeBasisPoints) / BigInt(10000);
+    return (amount * BigInt(feeBasisPoints)) / BigInt(10000);
   }
 
   /**
@@ -83,20 +83,18 @@ export class FlashLoanCallbackHandler {
   }> {
     const decoded = this.decodeCallbackData(callbackData);
     const fee = this.calculateFlashLoanFee(borrowAmount);
-    const totalRepayment = (borrowAmount + fee);
+    const totalRepayment = borrowAmount + fee;
 
     // In production, this would simulate the actual swap
     // For now, we estimate based on minOutputAmount
     const estimatedOutput = decoded.minOutputAmount;
-    const profit = (estimatedOutput > totalRepayment)
-      ? (estimatedOutput - totalRepayment)
-      : 0n;
+    const profit = estimatedOutput > totalRepayment ? estimatedOutput - totalRepayment : 0n;
 
     return {
       profit,
       fee,
       totalRepayment,
-      isViable: (profit > 0),
+      isViable: profit > 0,
     };
   }
 
@@ -121,7 +119,8 @@ export class FlashLoanCallbackHandler {
       ];
 
       const router = new Contract(
-        await (swapRouter as any).getAddress?.() ?? String((swapRouter as any).target ?? (swapRouter as any).address),
+        (await (swapRouter as any).getAddress?.()) ??
+          String((swapRouter as any).target ?? (swapRouter as any).address),
         swapAbi,
         this.signer
       );
@@ -156,7 +155,7 @@ export class FlashLoanCallbackHandler {
     fromAddress: string
   ): Promise<boolean> {
     const balance = await token.balanceOf(fromAddress);
-    return (balance >= requiredAmount);
+    return balance >= requiredAmount;
   }
 
   /**

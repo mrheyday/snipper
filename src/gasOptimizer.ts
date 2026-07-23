@@ -63,7 +63,7 @@ export class GasOptimizer {
 
     // Priority fee: use 25th percentile for standard, 50th for priority
     const priorityFee = ethers.parseUnits('1', 'gwei'); // 1 gwei standard
-    const maxFeePerGas = ((baseFee * 3n) + priorityFee); // 3x base + priority
+    const maxFeePerGas = baseFee * 3n + priorityFee; // 3x base + priority
 
     logger.info(`Current gas prices:`);
     logger.info(`  Base Fee: ${ethers.formatUnits(baseFee, 'gwei')} gwei`);
@@ -89,7 +89,7 @@ export class GasOptimizer {
     const { maxFeePerGas, baseFee, priorityFee } = await this.getCurrentGasPrices();
 
     const gasLimit = BigInt('145000'); // Typical swap
-    const estimatedCost = (gasLimit * maxFeePerGas);
+    const estimatedCost = gasLimit * maxFeePerGas;
 
     return {
       mode: 'direct',
@@ -115,11 +115,11 @@ export class GasOptimizer {
     const { maxFeePerGas, baseFee, priorityFee } = await this.getCurrentGasPrices();
 
     const gasLimit = BigInt('200000'); // Typical flash loan
-    const estimatedCost = (gasLimit * maxFeePerGas);
+    const estimatedCost = gasLimit * maxFeePerGas;
 
     // Calculate flash loan premium (hint bps; on-chain uses callback premium)
     const premiumBps = this.flashLoanPremium;
-    const premiumAmount = borrowAmount * BigInt(premiumBps) / BigInt(10000);
+    const premiumAmount = (borrowAmount * BigInt(premiumBps)) / BigInt(10000);
 
     return {
       mode: 'flashLoan',
@@ -127,7 +127,7 @@ export class GasOptimizer {
       gasPrice: baseFee,
       maxFeePerGas,
       maxPriorityFeePerGas: priorityFee,
-      estimatedCost: (estimatedCost + premiumAmount),
+      estimatedCost: estimatedCost + premiumAmount,
       description: `Flash loan swap (${this.formatBN(premiumAmount)} premium)`,
     };
   }
@@ -144,7 +144,7 @@ export class GasOptimizer {
     const { maxFeePerGas, baseFee, priorityFee } = await this.getCurrentGasPrices();
 
     const gasLimit = BigInt('105000'); // EIP-7702 optimized
-    const estimatedCost = (gasLimit * maxFeePerGas);
+    const estimatedCost = gasLimit * maxFeePerGas;
 
     return {
       mode: 'eip7702',
@@ -169,7 +169,7 @@ export class GasOptimizer {
     const { maxFeePerGas, baseFee, priorityFee } = await this.getCurrentGasPrices();
 
     const gasLimit = BigInt('170000'); // ERC-4337 with bundler
-    const estimatedCost = (gasLimit * maxFeePerGas);
+    const estimatedCost = gasLimit * maxFeePerGas;
 
     return {
       mode: 'erc4337',
@@ -199,17 +199,16 @@ export class GasOptimizer {
     ]);
 
     // Calculate gross profit
-    const inputValue = swapAmount * BigInt(inputPrice) / BigInt(BigInt('1e18'));
-    const outputValue = outputAmount * BigInt(outputPrice) / BigInt(BigInt('1e18'));
-    const grossProfit = (outputValue - inputValue);
+    const inputValue = (swapAmount * BigInt(inputPrice)) / BigInt(BigInt('1e18'));
+    const outputValue = (outputAmount * BigInt(outputPrice)) / BigInt(BigInt('1e18'));
+    const grossProfit = outputValue - inputValue;
 
     return estimates.map((est) => {
-      const netProfit = (grossProfit - est.estimatedCost);
-      const profitMargin = (outputValue > 0)
-        ? Number(netProfit * BigInt(10000) / BigInt(outputValue)) / 100
-        : 0;
+      const netProfit = grossProfit - est.estimatedCost;
+      const profitMargin =
+        outputValue > 0 ? Number((netProfit * BigInt(10000)) / BigInt(outputValue)) / 100 : 0;
 
-      const isRentable = (netProfit > 0) && profitMargin > 0.1; // >0.1% margin
+      const isRentable = netProfit > 0 && profitMargin > 0.1; // >0.1% margin
 
       return {
         mode: est.mode,
@@ -260,12 +259,13 @@ export class GasOptimizer {
 
     // Adjust slippage based on gas prices
     // High gas = tighter slippage to ensure profitability
-    const gasRatio = maxFeePerGas * BigInt(100) / BigInt(baseFee); // percentage of base fee
-    const slippageAdjustment = (gasRatio > 300) // >3x base fee = high gas
-      ? this.slippageBuffer
-      : 0n;
+    const gasRatio = (maxFeePerGas * BigInt(100)) / BigInt(baseFee); // percentage of base fee
+    const slippageAdjustment =
+      gasRatio > 300 // >3x base fee = high gas
+        ? this.slippageBuffer
+        : 0n;
 
-    const slippageTolerance = (baseSlippage + slippageAdjustment);
+    const slippageTolerance = baseSlippage + slippageAdjustment;
 
     // Deadline: 5 minutes from now
     const deadline = Math.floor(Date.now() / 1000) + 300;
@@ -298,10 +298,10 @@ export class GasOptimizer {
     const gasCostInUsd = est.estimatedCost; // Approximation
 
     // Break-even: output value = input value + gas cost
-    const breakEvenPrice = inputPrice + (gasCostInUsd * BigInt(1e18) / BigInt(swapAmount));
+    const breakEvenPrice = inputPrice + (gasCostInUsd * BigInt(1e18)) / BigInt(swapAmount);
 
     // Profitability threshold: break-even + 0.5% margin
-    const profitThreshold = breakEvenPrice * 1005n / 1000n;
+    const profitThreshold = (breakEvenPrice * 1005n) / 1000n;
 
     const requiredOutputPrice = profitThreshold;
 
@@ -333,9 +333,9 @@ export class GasOptimizer {
     const veryHigh = ethers.parseUnits('200', 'gwei');
 
     let status: 'normal' | 'high' | 'veryHigh' = 'normal';
-    if ((maxFeePerGas >= veryHigh)) {
+    if (maxFeePerGas >= veryHigh) {
       status = 'veryHigh';
-    } else if ((maxFeePerGas >= high)) {
+    } else if (maxFeePerGas >= high) {
       status = 'high';
     }
 

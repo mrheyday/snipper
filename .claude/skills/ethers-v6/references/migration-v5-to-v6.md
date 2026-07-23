@@ -6,15 +6,15 @@ Side-by-side reference for translating existing v5 code. This project's `package
 
 ```typescript
 // v5: namespaced, sub-package imports needed for granular control
-import { ethers } from "ethers";
-import { providers } from "ethers";
+import { ethers } from 'ethers';
+import { providers } from 'ethers';
 const { InfuraProvider } = providers;
-import { InfuraProvider } from "@ethersproject/providers"; // alt granular import
+import { InfuraProvider } from '@ethersproject/providers'; // alt granular import
 
 // v6: everything flat off the root package
-import { ethers } from "ethers";
-import { InfuraProvider, JsonRpcProvider, Contract, Wallet, parseEther, formatUnits } from "ethers";
-import { InfuraProvider } from "ethers/providers"; // granular, tree-shakeable equivalent
+import { ethers } from 'ethers';
+import { InfuraProvider, JsonRpcProvider, Contract, Wallet, parseEther, formatUnits } from 'ethers';
+import { InfuraProvider } from 'ethers/providers'; // granular, tree-shakeable equivalent
 ```
 
 There is no more `ethers.utils`, `ethers.providers`, `ethers.constants`, or `ethers.errors` namespace — those members moved to the flat top-level export.

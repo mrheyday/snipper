@@ -12,18 +12,18 @@ This document covers Ethereum improvement proposals that are **proposed, draft, 
 **EIP Number**: EIP-7702  
 **Proposal Status**: Approved for inclusion in Ethereum  
 **Target Timeline**: Q1-Q2 2025 (Prague hardfork)  
-**Official Spec**: https://eips.ethereum.org/EIPS/eip-7702  
+**Official Spec**: https://eips.ethereum.org/EIPS/eip-7702
 
 ### Current Status
 
-| Aspect | Status |
-|--------|--------|
-| **EIP Discussion** | ✅ Completed |
-| **Consensus** | ✅ Achieved |
-| **Implementation** | ✅ Reference implementations available |
-| **Testing** | ✅ Testnet implementations (Sepolia, Holesky) |
-| **Security Audit** | ✅ Reviewed by community |
-| **Formal Ratification** | ⏳ Pending Prague hardfork |
+| Aspect                  | Status                                        |
+| ----------------------- | --------------------------------------------- |
+| **EIP Discussion**      | ✅ Completed                                  |
+| **Consensus**           | ✅ Achieved                                   |
+| **Implementation**      | ✅ Reference implementations available        |
+| **Testing**             | ✅ Testnet implementations (Sepolia, Holesky) |
+| **Security Audit**      | ✅ Reviewed by community                      |
+| **Formal Ratification** | ⏳ Pending Prague hardfork                    |
 
 ### What It Does
 
@@ -36,12 +36,14 @@ EOA Authorization → Delegated Execution → Atomic Completion
 ### Why It Matters for MEV Sniping
 
 **Benefits**:
+
 1. **Atomic Swaps**: Execute multiple operations atomically
 2. **No Deployment**: Avoid deploying smart contract accounts
 3. **Gas Efficiency**: Single transaction, unified state
 4. **MEV Protection**: Atomic execution prevents partial fills
 
 **Example Flow**:
+
 ```
 1. EOA sends EIP-7702 tx with authorization
 2. Authorization delegates to DelegatedExecutor
@@ -53,21 +55,26 @@ EOA Authorization → Delegated Execution → Atomic Completion
 ### Implementation in This Codebase
 
 **Files**:
+
 - `src/eip7702-improved.ts` — Full reference implementation
 - `contracts/src/DelegatedExecutor.sol` — Delegatee contract
 - `docs/EIP7702_EXTERNAL_DELEGATEE.md` — Integration guide
 
 **Key Classes**:
+
 ```typescript
 export class EIP7702AuthorizationSigner {
-  async createAuthorization(): Promise<EIP7702Authorization>
-  encodeAuthorizationList(auth: EIP7702Authorization): string
+  async createAuthorization(): Promise<EIP7702Authorization>;
+  encodeAuthorizationList(auth: EIP7702Authorization): string;
 }
 
 export class EIP7702DelegatedExecutor {
-  async executeDelegatedSwap(params: DelegatedSwapParams): Promise<DelegatedSwapResult>
-  async executeDelegatedBatchSwaps(swaps: DelegatedSwapParams[], deadline: number): Promise<DelegatedSwapResult>
-  async getAuthorizationData(): Promise<string>
+  async executeDelegatedSwap(params: DelegatedSwapParams): Promise<DelegatedSwapResult>;
+  async executeDelegatedBatchSwaps(
+    swaps: DelegatedSwapParams[],
+    deadline: number
+  ): Promise<DelegatedSwapResult>;
+  async getAuthorizationData(): Promise<string>;
 }
 ```
 
@@ -102,6 +109,7 @@ Before deploying EIP-7702 mode to mainnet:
 ### Testing & Validation
 
 **Current Status**:
+
 - ✅ Deployed locally (anvil)
 - ✅ Deployment script working (Deploy.s.sol)
 - ✅ Calldata specifications documented
@@ -109,6 +117,7 @@ Before deploying EIP-7702 mode to mainnet:
 - 🔲 Mainnet deployment (post-Prague 2025)
 
 **Test Checklist for Prague**:
+
 ```
 ✅ Authority signature generation
 ✅ Authorization encoding
@@ -123,12 +132,14 @@ Before deploying EIP-7702 mode to mainnet:
 ### Security Considerations
 
 **✅ Safe**:
+
 - Authorization requires EOA signature
 - Cannot be replayed (nonce protection)
 - Delegation limited to single transaction
 - DelegatedExecutor is stateless
 
 **⚠️ Monitor**:
+
 - Ensure delegatee contract is audited
 - Verify no storage vulnerabilities
 - Check for reentrancy possibilities
@@ -141,12 +152,14 @@ While EIP-7702 awaits Prague, you can use the **pre-deployed bebe**:
 **Address**: `0x00000000BEBEDB7C30ee418158e26E31a5A8f3E2`
 
 **Advantages**:
+
 - ✅ Available now (all networks)
 - ✅ Professionally audited
 - ✅ Zero deployment cost
 - ✅ Optimized gas
 
 **Switch to bebe**:
+
 ```env
 DELEGATED_EXECUTOR_ADDRESS=0x00000000BEBEDB7C30ee418158e26E31a5A8f3E2
 USE_EXTERNAL_DELEGATEE=true
@@ -159,11 +172,12 @@ USE_EXTERNAL_DELEGATEE=true
 **Status**: 🔲 **DRAFT/PROPOSED** (Not formally standardized)  
 **Type**: Variant of EIP-7702  
 **Reference Implementation**: https://github.com/Vectorized/bebe  
-**Canonical Address**: `0x00000000BEBEDB7C30ee418158e26E31a5A8f3E2`  
+**Canonical Address**: `0x00000000BEBEDB7C30ee418158e26E31a5A8f3E2`
 
 ### What It Is
 
 A standardized interface for stateless batch executor contracts that work with EIP-7702. Defines how delegatees should:
+
 - Accept delegated calls
 - Execute multiple operations atomically
 - Return results correctly
@@ -172,6 +186,7 @@ A standardized interface for stateless batch executor contracts that work with E
 ### Why It's Important
 
 **Standardization Benefits**:
+
 1. **Interoperability**: Multiple delegatee implementations compatible
 2. **Gas Optimization**: Shared patterns for efficiency
 3. **Security**: Common interface = common audits
@@ -186,7 +201,7 @@ A standardized interface for stateless batch executor contracts that work with E
 contract bebe is IBebeExecutor {
   function executeSwap(...) external returns (uint256)
   function executeBatchSwaps(...) external returns (uint256[])
-  function isValidSignature(bytes32 hash, bytes memory signature) 
+  function isValidSignature(bytes32 hash, bytes memory signature)
     external view returns (bytes4)
 }
 ```
@@ -194,11 +209,13 @@ contract bebe is IBebeExecutor {
 ### Current Usage in This Codebase
 
 **Files**:
+
 - `docs/EIP7702_EXTERNAL_DELEGATEE.md`
 - `BEBE_INTEGRATION_SUMMARY.md`
 - `INTEGRATION_CHECKLIST.md`
 
 **Configuration**:
+
 ```env
 # Use bebe delegatee
 DELEGATED_EXECUTOR_ADDRESS=0x00000000BEBEDB7C30ee418158e26E31a5A8f3E2
@@ -214,6 +231,7 @@ USE_EXTERNAL_DELEGATEE=true
 ### Recommendation
 
 **Use bebe now** because:
+
 - ✅ Immediately available
 - ✅ Production-audited
 - ✅ Zero cost
@@ -245,17 +263,18 @@ MEV snipers may integrate with yield-bearing tokens. EIP-5115 standardizes the i
 
 ## Staging Table: Proposed Standards
 
-| EIP/ERC | Name | Status | Priority | Timeline | Action |
-|---------|------|--------|----------|----------|--------|
-| **EIP-7702** | Set EOA Account Code | ✅ Consensus | 🔴 HIGH | Q1-Q2 2025 | Monitor Prague hardfork |
-| **ERC-7821** | Batch Executor | 🔲 Draft | 🟡 MEDIUM | 2025-2026 | Use bebe reference impl |
-| **EIP-5115** | Standardized Yield | 🔲 Draft | 🟢 LOW | Future | Monitor (not needed now) |
+| EIP/ERC      | Name                 | Status       | Priority  | Timeline   | Action                   |
+| ------------ | -------------------- | ------------ | --------- | ---------- | ------------------------ |
+| **EIP-7702** | Set EOA Account Code | ✅ Consensus | 🔴 HIGH   | Q1-Q2 2025 | Monitor Prague hardfork  |
+| **ERC-7821** | Batch Executor       | 🔲 Draft     | 🟡 MEDIUM | 2025-2026  | Use bebe reference impl  |
+| **EIP-5115** | Standardized Yield   | 🔲 Draft     | 🟢 LOW    | Future     | Monitor (not needed now) |
 
 ---
 
 ## Migration Strategy
 
 ### Phase 1: Current (2025)
+
 ```
 Three Active Modes:
 ✅ Direct (SniperSearcher)
@@ -268,6 +287,7 @@ Three Active Modes:
 **No changes needed** for MEV operation
 
 ### Phase 2: Prague Hardfork (Q1-Q2 2025)
+
 ```
 Four Active Modes:
 ✅ Direct
@@ -280,6 +300,7 @@ Four Active Modes:
 **Testing**: Verify gas costs and profitability
 
 ### Phase 3: Post-Prague (2025+)
+
 ```
 Four Production Modes:
 ✅ Direct (legacy, stable)
@@ -330,34 +351,41 @@ Four Production Modes:
 ## Q&A: Proposed Standards
 
 ### Q: Is EIP-7702 safe to use now?
+
 **A**: Safe for development/testing. Production requires Prague hardfork (2025). Use bebe as stable alternative now.
 
 ### Q: What if Prague gets delayed?
+
 **A**: EIP-4337 and Flash Loan modes remain fully functional. EIP-7702 activation deferred but implementation ready.
 
 ### Q: Can I use EIP-7702 on Arbitrum before Ethereum Prague?
+
 **A**: Not natively. Arbitrum follows Ethereum L1 hardforks with slight delay. Watch Arbitrum roadmap.
 
 ### Q: Should I switch from bebe to EIP-7702 mode?
+
 **A**: After Prague, yes. Both work identically. EIP-7702 is native, bebe is external. Choose based on gas optimization data.
 
 ### Q: Is ERC-7821 formalized?
+
 **A**: Not yet. Still draft. Using bebe (reference impl) is safe because it's audited and open-source.
 
 ### Q: Can I deploy my own ERC-7821 delegatee?
+
 **A**: Yes, you have DelegatedExecutor. But bebe is optimized and free. Deploy only if you need custom logic.
 
 ---
 
 ## Summary: Proposed Standards Status
 
-| Standard | Now | Prague | Recommendation |
-|----------|-----|--------|-----------------|
-| **EIP-7702** | 🔲 Dev | ✅ Prod | Enable post-Prague |
+| Standard     | Now      | Prague      | Recommendation                  |
+| ------------ | -------- | ----------- | ------------------------------- |
+| **EIP-7702** | 🔲 Dev   | ✅ Prod     | Enable post-Prague              |
 | **ERC-7821** | 🔲 Draft | 🟡 Emerging | Use bebe now, standardize later |
-| Other EIPs | — | — | Monitor for relevance |
+| Other EIPs   | —        | —           | Monitor for relevance           |
 
-**Bottom Line**: 
+**Bottom Line**:
+
 - ✅ Development ready now
 - ✅ Production ready post-Prague (2025)
 - ✅ Use bebe as stable alternative

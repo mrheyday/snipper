@@ -78,9 +78,7 @@ async function main() {
     console.log('');
     console.log('[status-only] no type-4 sent');
     if (before.delegate) {
-      console.log(
-        '  designator  0xef0100' + String(before.delegate).slice(2).toLowerCase()
-      );
+      console.log('  designator  0xef0100' + String(before.delegate).slice(2).toLowerCase());
     }
     return;
   }

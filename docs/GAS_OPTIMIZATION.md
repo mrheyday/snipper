@@ -47,6 +47,7 @@ console.log(`ERC-4337 cost: ${erc4337.estimatedCost.toString()}`);
 ### 1. Gas Price Monitoring
 
 **Real-time gas metrics:**
+
 - Base fee per gas
 - Priority fee
 - Max fee per gas
@@ -60,12 +61,12 @@ const { baseFee, priorityFee, maxFeePerGas } = await optimizer.getCurrentGasPric
 
 Each execution mode has different gas requirements:
 
-| Mode | Base Gas | Typical Total | Notes |
-|------|----------|---------------|-------|
-| **Direct** | 45k approval | ~145k | Fastest, cheapest |
-| **Flash Loan** | 70k initiation | ~200k | +0.09% premium |
-| **EIP-7702** | 5k auth | ~105k | Requires Prague |
-| **ERC-4337** | 50k EntryPoint | ~170k | Bundler overhead |
+| Mode           | Base Gas       | Typical Total | Notes             |
+| -------------- | -------------- | ------------- | ----------------- |
+| **Direct**     | 45k approval   | ~145k         | Fastest, cheapest |
+| **Flash Loan** | 70k initiation | ~200k         | +0.09% premium    |
+| **EIP-7702**   | 5k auth        | ~105k         | Requires Prague   |
+| **ERC-4337**   | 50k EntryPoint | ~170k         | Bundler overhead  |
 
 ```typescript
 // Direct mode
@@ -93,10 +94,10 @@ Calculates net profit for each execution mode:
 
 ```typescript
 const analysis = await optimizer.analyzeProfitability(
-  swapAmount,           // Input amount
-  outputAmount,         // Expected output
-  inputPrice,          // Input token price
-  outputPrice          // Output token price
+  swapAmount, // Input amount
+  outputAmount, // Expected output
+  inputPrice, // Input token price
+  outputPrice // Output token price
 );
 
 // Results:
@@ -108,9 +109,7 @@ const analysis = await optimizer.analyzeProfitability(
 // ]
 
 // Pick the most profitable
-const best = analysis.reduce((a, b) => 
-  a.netProfit.gt(b.netProfit) ? a : b
-);
+const best = analysis.reduce((a, b) => (a.netProfit.gt(b.netProfit) ? a : b));
 
 if (best.isRentable) {
   console.log(`✅ Execute via ${best.mode}`);
@@ -150,10 +149,7 @@ const tx = await executor.executeSwap({
 Determine the minimum output price needed for profitability:
 
 ```typescript
-const threshold = await optimizer.estimateProfitabilityThreshold(
-  swapAmount,
-  inputPrice
-);
+const threshold = await optimizer.estimateProfitabilityThreshold(swapAmount, inputPrice);
 
 // Returns:
 // {
@@ -204,9 +200,7 @@ async function compareCosts() {
   const optimizer = new GasOptimizer();
 
   const direct = await optimizer.estimateDirectModeGas();
-  const flash = await optimizer.estimateFlashLoanModeGas(
-    BigNumber.from('1000000000000000000')
-  );
+  const flash = await optimizer.estimateFlashLoanModeGas(BigNumber.from('1000000000000000000'));
 
   console.log(`Direct: ${direct.estimatedCost.toString()} wei`);
   console.log(`Flash: ${flash.estimatedCost.toString()} wei`);
@@ -222,10 +216,7 @@ async function compareCosts() {
 ### Example 2: Profitability-Based Mode Selection
 
 ```typescript
-async function selectOptimalMode(
-  swapAmount: BigNumber,
-  expectedOutput: BigNumber
-) {
+async function selectOptimalMode(swapAmount: BigNumber, expectedOutput: BigNumber) {
   const optimizer = new GasOptimizer();
 
   const analysis = await optimizer.analyzeProfitability(
@@ -236,7 +227,7 @@ async function selectOptimalMode(
   );
 
   // Filter for profitable modes
-  const profitable = analysis.filter(a => a.isRentable);
+  const profitable = analysis.filter((a) => a.isRentable);
 
   if (profitable.length === 0) {
     console.log('❌ No profitable modes');
@@ -244,9 +235,7 @@ async function selectOptimalMode(
   }
 
   // Select highest profit
-  const best = profitable.reduce((a, b) =>
-    a.netProfit.gt(b.netProfit) ? a : b
-  );
+  const best = profitable.reduce((a, b) => (a.netProfit.gt(b.netProfit) ? a : b));
 
   console.log(`✅ Execute via ${best.mode}`);
   console.log(`   Net profit: ${best.netProfit.toString()}`);
@@ -283,7 +272,7 @@ async function executeWithGasOptimization() {
     outputPrice
   );
 
-  const best = analysis.find(a => a.isRentable);
+  const best = analysis.find((a) => a.isRentable);
   if (!best) {
     console.log('Not profitable at current gas prices');
     return;
@@ -312,10 +301,10 @@ async function executeWithGasOptimization() {
 ```
 Approval phase:
   - ERC20 approval: ~45,000 gas
-  
+
 Swap phase:
   - Uniswap V3 routing: ~100,000 gas
-  
+
 Total: ~145,000 gas
 ```
 
@@ -324,11 +313,11 @@ Total: ~145,000 gas
 ```
 Initiation:
   - Aave pool call: ~70,000 gas
-  
+
 Callback:
   - Swap execution: ~100,000 gas
   - Repayment: ~30,000 gas
-  
+
 Total: ~200,000 gas
 Premium: 0.09% of borrowed amount
 ```
@@ -338,10 +327,10 @@ Premium: 0.09% of borrowed amount
 ```
 Authorization:
   - Signature encoding: ~5,000 gas
-  
+
 Execution:
   - Delegated swap: ~100,000 gas
-  
+
 Total: ~105,000 gas
 Note: Requires Prague hardfork
 ```
@@ -351,13 +340,13 @@ Note: Requires Prague hardfork
 ```
 EntryPoint:
   - Validation: ~50,000 gas
-  
+
 Wallet:
   - Execution: ~100,000 gas
-  
+
 Bundler overhead:
   - Pre-verification: ~20,000 gas
-  
+
 Total: ~170,000 gas
 ```
 
@@ -377,6 +366,7 @@ const optimizer = new GasOptimizer(42161);
 ### Customize Slippage Buffer
 
 The optimizer can adjust slippage based on gas prices:
+
 - Normal gas: use base slippage
 - High gas (>3x base): add 0.1% buffer
 - Very high gas (>5x base): add 0.2% buffer
@@ -402,7 +392,7 @@ const analysis = await optimizer.analyzeProfitability(
   outputPrice
 );
 
-analysis.forEach(result => {
+analysis.forEach((result) => {
   logger.info(`${result.mode}: ${result.recommendation}`);
 });
 ```
@@ -449,9 +439,7 @@ if (alerts.status !== 'normal') {
 ### 4. Select by Profitability
 
 ```typescript
-const best = analysis.reduce((a, b) =>
-  a.netProfit.gt(b.netProfit) ? a : b
-);
+const best = analysis.reduce((a, b) => (a.netProfit.gt(b.netProfit) ? a : b));
 // Always execute via best mode
 ```
 
@@ -473,6 +461,7 @@ const params = await optimizer.optimizeExecutionParams(...);
 ### Q: No profitable modes?
 
 **A:** All modes show negative profit. Either:
+
 - Wait for better prices
 - Reduce slippage expectations
 - Look for larger opportunities
@@ -480,6 +469,7 @@ const params = await optimizer.optimizeExecutionParams(...);
 ### Q: Which mode to use?
 
 **A:** Always use `optimizer.analyzeProfitability()` to find the best mode. Profitability varies by:
+
 - Current gas prices
 - Swap opportunity size
 - Market volatility

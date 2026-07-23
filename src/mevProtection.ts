@@ -1,4 +1,4 @@
-import { JsonRpcProvider,    } from 'ethers';
+import { JsonRpcProvider } from 'ethers';
 
 /**
  * MEV Protection Strategy
@@ -315,7 +315,7 @@ export class MEVProtection {
       // Check for front-run
       if (txIndex > 0) {
         const prevTx = await this.publicProvider.getTransaction(block.transactions[txIndex - 1]);
-        if (prevTx && prevTx.to === tx.to && ((prevTx.gasPrice ?? 0n) >= (tx.gasPrice ?? 0n))) {
+        if (prevTx && prevTx.to === tx.to && (prevTx.gasPrice ?? 0n) >= (tx.gasPrice ?? 0n)) {
           frontrunScore += 30;
           details.push('Front-run candidate detected');
         }
@@ -324,7 +324,7 @@ export class MEVProtection {
       // Check for back-run (sandwich)
       if (txIndex < block.transactions.length - 1) {
         const nextTx = await this.publicProvider.getTransaction(block.transactions[txIndex + 1]);
-        if (nextTx && nextTx.to === tx.to && ((nextTx.gasPrice ?? 0n) >= (tx.gasPrice ?? 0n))) {
+        if (nextTx && nextTx.to === tx.to && (nextTx.gasPrice ?? 0n) >= (tx.gasPrice ?? 0n)) {
           sandwichScore += 40;
           details.push('Back-run candidate detected');
         }

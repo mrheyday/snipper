@@ -6,18 +6,13 @@
   "contracts": {
     "SniperSearcher": {
       "address": "0xAC7465949D3178C9F13d629c6417b2a02D50DdC8",
-      "constructor_args": [
-        "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45",
-        "0"
-      ],
+      "constructor_args": ["0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45", "0"],
       "description": "Owner-scoped Uni V3 exactInput executor; minAmountBitLength=0",
       "arbiscan": "https://arbiscan.io/address/0xAC7465949D3178C9F13d629c6417b2a02D50DdC8"
     },
     "DelegatedExecutor": {
       "address": "0xc7a5B0873CB174A78017A66b541B24be64fBAde4",
-      "constructor_args": [
-        "0"
-      ],
+      "constructor_args": ["0"],
       "description": "EIP-7702 delegatee for Uniswap swaps",
       "role": "EIP-7702 single-target Uni swaps",
       "arbiscan": "https://arbiscan.io/address/0xc7a5B0873CB174A78017A66b541B24be64fBAde4"

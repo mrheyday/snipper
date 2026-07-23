@@ -19,10 +19,10 @@ How a delegated EOA (type-4 / SetCode) can reach other contracts.
 
 ## Current support matrix
 
-| Delegatee | Multi-target CALL to other contracts? | How |
-|---|---|---|
-| DelegatedExecutor | **No** (single target) | Hardcoded SWAP_ROUTER. executeSwap* / executeBatchSwaps only talk to Uniswap V3. Multicallable.multicall only delegatecalls itself. _executeCallback only address(this).call. |
-| BasicEOABatchExecutor | **Yes** | ERC-7821 execute(mode, abi.encode(calls[])). Each Call{to,value,data} is a real CALL from the EOA. Auth: empty opData requires msg.sender == address(this) (7702 self-call). |
+| Delegatee             | Multi-target CALL to other contracts? | How                                                                                                                                                                           |
+| --------------------- | ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| DelegatedExecutor     | **No** (single target)                | Hardcoded SWAP_ROUTER. executeSwap* / executeBatchSwaps only talk to Uniswap V3. Multicallable.multicall only delegatecalls itself. _executeCallback only address(this).call. |
+| BasicEOABatchExecutor | **Yes**                               | ERC-7821 execute(mode, abi.encode(calls[])). Each Call{to,value,data} is a real CALL from the EOA. Auth: empty opData requires msg.sender == address(this) (7702 self-call).  |
 
 ## TypeScript entry points
 

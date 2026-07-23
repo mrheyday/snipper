@@ -40,10 +40,10 @@ toQuantity(value: BigNumberish): string;   // -> minimal "0x..." hex quantity (r
 ## Solidity-style packed encoding
 
 ```typescript
-import { solidityPacked, solidityPackedKeccak256, solidityPackedSha256 } from "ethers";
+import { solidityPacked, solidityPackedKeccak256, solidityPackedSha256 } from 'ethers';
 
-const packed: string = solidityPacked(["address", "uint256"], [addr, amount]);
-const hash: string = solidityPackedKeccak256(["address", "uint256"], [addr, amount]);
+const packed: string = solidityPacked(['address', 'uint256'], [addr, amount]);
+const hash: string = solidityPackedKeccak256(['address', 'uint256'], [addr, amount]);
 ```
 
 These replace v5's `ethers.utils.solidityPack` / `solidityKeccak256` / `soliditySha256` — same behavior (tightly-packed, non-padded encoding matching Solidity's `abi.encodePacked`), new flat names.

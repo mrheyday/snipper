@@ -99,7 +99,10 @@ export class ExecutionBridge {
     // Flash-loan-only: no fallback to other modes.
     // Capital-free execution is the entire point; falling back to direct would
     // require on-chain funds and defeats the purpose.
-    if (mode === ExecutionMode.FLASH_LOAN || this.config.preferredMode === ExecutionMode.FLASH_LOAN) {
+    if (
+      mode === ExecutionMode.FLASH_LOAN ||
+      this.config.preferredMode === ExecutionMode.FLASH_LOAN
+    ) {
       console.log(`  Flash loan failed — no fallback permitted in flash-loan-only mode.`);
       return result;
     }
@@ -206,8 +209,7 @@ export class ExecutionBridge {
    * The slippage constraint is NEVER relaxed during the search.
    */
   private async executeFlashLoan(opportunity: SwapOpportunity): Promise<BridgeExecutionResult> {
-    const useDynamic =
-      this.config.dynamicFlashSize !== false; // default true
+    const useDynamic = this.config.dynamicFlashSize !== false; // default true
 
     let loanAmount = opportunity.amountIn;
     let loanMinAmountOut = opportunity.minAmountOut;
@@ -412,13 +414,13 @@ export class ExecutionBridge {
       const status = await this.eip7702Executor.getStatus();
       eip7702Delegation = status.delegate;
       // Ready if we can sign type-4 (always, with a funded EOA) — designator optional.
-      eip7702Ready = (balance > 0);
+      eip7702Ready = balance > 0;
     } catch {
       eip7702Ready = false;
     }
 
     return {
-      directReady: (balance > 0),
+      directReady: balance > 0,
       flashLoanReady: true, // Always available (Aave)
       eip7702Ready,
       balance: balance,
@@ -476,7 +478,7 @@ export class BridgeStrategyAnalyzer {
     const directCost = opportunity.amountIn;
 
     // Flash loan: Aave V3 fee (Arbitrum live 5 bps / 0.05%; governance-updatable)
-    const flashFee = opportunity.amountIn * 5n / 10000n;
+    const flashFee = (opportunity.amountIn * 5n) / 10000n;
 
     // Recommend based on cost efficiency
     let recommended = ExecutionMode.DIRECT;
@@ -485,7 +487,7 @@ export class BridgeStrategyAnalyzer {
     if ((opportunity.estimatedProfit ?? 0n) < flashFee) {
       recommended = ExecutionMode.EIP7702;
       reasoning = 'Profit too low for flash loan fee (~0.05%)';
-    } else if (opportunity.estimatedProfit && (opportunity.estimatedProfit > flashFee)) {
+    } else if (opportunity.estimatedProfit && opportunity.estimatedProfit > flashFee) {
       recommended = ExecutionMode.FLASH_LOAN;
       reasoning = 'Large profit justifies flash loan fee';
     }
@@ -516,9 +518,9 @@ export class BridgeStrategyAnalyzer {
     const flashGas = BigInt(500000);
     const eip7702Gas = BigInt(150000);
 
-    const directCost = (directGas * gasPrice);
-    const flashCost = ((flashGas * gasPrice) + opportunity.amountIn * 5n / 10000n); // gas + fee
-    const eip7702Cost = (eip7702Gas * gasPrice);
+    const directCost = directGas * gasPrice;
+    const flashCost = flashGas * gasPrice + (opportunity.amountIn * 5n) / 10000n; // gas + fee
+    const eip7702Cost = eip7702Gas * gasPrice;
 
     return {
       direct: directCost,

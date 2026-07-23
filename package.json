@@ -14,7 +14,8 @@
     "register-eoa": "node scripts/register-eoa-delegation.mjs",
     "register-eoa:status": "node scripts/register-eoa-delegation.mjs --status",
     "register-eoa:delegated": "node scripts/register-eoa-delegation.mjs --target delegated",
-    "snipe-tokens": "node scripts/snipe-token-set.mjs"
+    "snipe-tokens": "node scripts/snipe-token-set.mjs",
+    "flash-usdc-bowwow": "node scripts/flash-usdc-bowwow.mjs"
   },
   "dependencies": {
     "@openzeppelin/contracts": "^5.6.1",
@@ -22,13 +23,15 @@
     "@uniswap/v3-sdk": "^3.31.0",
     "axios": "^1.18.1",
     "dotenv": "^17.4.2",
+    "eth-utils": "^0.1.0-alpha.9",
     "ethers": "^6.17.0",
+    "prettier-plugin-solidity": "^2.3.1",
     "ts-node": "^10.9.2",
     "tslib": "^2.8.1",
     "typescript": "^5.9.3"
   },
   "devDependencies": {
-    "@types/node": "^22",
+    "@types/node": "^22.20.1",
     "@typescript-eslint/eslint-plugin": "^8.65.0",
     "@typescript-eslint/parser": "^8.65.0",
     "eslint": "^9.39.5",

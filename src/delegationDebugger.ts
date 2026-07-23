@@ -66,7 +66,7 @@ export class DelegationDebugger {
     this.addState('validation', checks, {
       eoaBalance: ethers.formatUnits(checks.eoaBalance.has, 18),
       needsBalance: ethers.formatUnits(checks.eoaBalance.needs, 18),
-      balanceSufficient: (checks.eoaBalance.has >= checks.eoaBalance.needs),
+      balanceSufficient: checks.eoaBalance.has >= checks.eoaBalance.needs,
       eoaNonce: checks.eoaNonce,
       eoaEth: ethers.formatEther(checks.eoaEth),
       hasExecutorCode: checks.executorCode,
@@ -77,7 +77,7 @@ export class DelegationDebugger {
     logger.info('PHASE 2: PRE-FLIGHT VALIDATION');
     logger.info('─'.repeat(70));
 
-    const balanceSufficient = (checks.eoaBalance.has >= checks.eoaBalance.needs);
+    const balanceSufficient = checks.eoaBalance.has >= checks.eoaBalance.needs;
     logger.info(
       `${balanceSufficient ? '✅' : '❌'} Token Balance: ${ethers.formatUnits(
         checks.eoaBalance.has,
@@ -88,9 +88,7 @@ export class DelegationDebugger {
     logger.info(`✅ EOA Nonce: ${checks.eoaNonce}`);
 
     const ethSufficient = checks.eoaEth > ethers.parseEther('0.001');
-    logger.info(
-      `${ethSufficient ? '✅' : '⚠️'} Gas (ETH): ${ethers.formatEther(checks.eoaEth)}`
-    );
+    logger.info(`${ethSufficient ? '✅' : '⚠️'} Gas (ETH): ${ethers.formatEther(checks.eoaEth)}`);
 
     logger.info(
       `${checks.executorCode ? '✅' : '⚠️'} Executor Code: ${
@@ -99,10 +97,7 @@ export class DelegationDebugger {
     );
 
     logger.info(
-      `${(checks.approval > 0) ? '✅' : '⚠️'} Approval: ${ethers.formatUnits(
-        checks.approval,
-        18
-      )}`
+      `${checks.approval > 0 ? '✅' : '⚠️'} Approval: ${ethers.formatUnits(checks.approval, 18)}`
     );
 
     const deadlineValid = checks.deadline > Math.floor(Date.now() / 1000);
@@ -283,7 +278,7 @@ export class DelegationDebugger {
 
     if (params.profit) {
       const profitAmount = params.profit;
-      const isProfitable = (profitAmount > 0);
+      const isProfitable = profitAmount > 0;
       logger.info(
         `  Profit: ${ethers.formatUnits(profitAmount, 18)} ${isProfitable ? '📈' : '📉'}`
       );

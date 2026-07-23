@@ -118,7 +118,7 @@ function rlpEncodeBytes(input: Buffer): Buffer {
 
 function rlpEncodeUint(value: bigint | string | number): Buffer {
   const bn = BigInt(value);
-  if ((bn === 0n)) return rlpEncodeBytes(Buffer.alloc(0));
+  if (bn === 0n) return rlpEncodeBytes(Buffer.alloc(0));
   let hex = ethers.toBeHex(bn).slice(2);
   if (hex.length % 2) hex = '0' + hex;
   return rlpEncodeBytes(Buffer.from(hex, 'hex'));
@@ -154,11 +154,7 @@ function rlpEncodeList(items: Buffer[]): Buffer {
  *
  * Do NOT use solidityPack, and do NOT personal_sign / signMessage (EIP-191).
  */
-export function authorizationDigest(
-  chainId: number,
-  delegate: string,
-  nonce: number
-): string {
+export function authorizationDigest(chainId: number, delegate: string, nonce: number): string {
   const rlpAuth = rlpEncodeList([
     rlpEncodeUint(chainId),
     rlpEncodeAddress(delegate),
@@ -179,8 +175,7 @@ export async function signAuthorization(
 ): Promise<Authorization> {
   const chainId = opts?.chainId ?? CHAIN_ID;
   const addr = await authority.getAddress();
-  const nonce =
-    opts?.nonce ?? (await provider.getTransactionCount(addr, 'pending'));
+  const nonce = opts?.nonce ?? (await provider.getTransactionCount(addr, 'pending'));
   const delegateCs = validateAndChecksumAddress(delegate);
 
   const digest = authorizationDigest(chainId, delegateCs, nonce);
@@ -254,9 +249,7 @@ export interface Type4TxFields {
   authorizationList: Authorization[];
 }
 
-function rlpEncodeAccessList(
-  list: Array<{ address: string; storageKeys: string[] }> = []
-): Buffer {
+function rlpEncodeAccessList(list: Array<{ address: string; storageKeys: string[] }> = []): Buffer {
   return rlpEncodeList(
     list.map((entry) =>
       rlpEncodeList([
@@ -394,8 +387,7 @@ export class EIP7702Authorizer {
     opts?: { selfSponsored?: boolean }
   ): Promise<Authorization> {
     const addr = await this.authority.getAddress();
-    const current =
-      accountNonce ?? (await provider.getTransactionCount(addr, 'pending'));
+    const current = accountNonce ?? (await provider.getTransactionCount(addr, 'pending'));
     const selfSponsored = opts?.selfSponsored !== false;
     const authNonce = selfSponsored ? current + 1 : current;
     return signAuthorization(this.authority, this.delegatedExecutor, {
@@ -409,8 +401,7 @@ export class EIP7702Authorizer {
     opts?: { selfSponsored?: boolean }
   ): Promise<Authorization> {
     const addr = await this.authority.getAddress();
-    const current =
-      accountNonce ?? (await provider.getTransactionCount(addr, 'pending'));
+    const current = accountNonce ?? (await provider.getTransactionCount(addr, 'pending'));
     const selfSponsored = opts?.selfSponsored !== false;
     const authNonce = selfSponsored ? current + 1 : current;
     return signClearAuthorization(this.authority, {
@@ -695,12 +686,12 @@ export class EIP7702TransactionBuilder {
     });
     const fee = await provider.getFeeData();
     const tip = fee.maxPriorityFeePerGas ?? ethers.parseUnits('0.01', 'gwei');
-    const maxFee = fee.maxFeePerGas ?? (((await provider.getFeeData()).gasPrice ?? 0n) * 2n);
+    const maxFee = fee.maxFeePerGas ?? ((await provider.getFeeData()).gasPrice ?? 0n) * 2n;
 
     const sent = await sendType4Transaction(args.authority, {
       chainId,
       maxPriorityFeePerGas: tip,
-      maxFeePerGas: (maxFee > tip) ? maxFee : (tip * 2n),
+      maxFeePerGas: maxFee > tip ? maxFee : tip * 2n,
       gasLimit: args.gasLimit ?? BigInt(150_000),
       to: args.to === undefined ? eoa : args.to,
       value: args.value ?? BigInt(0),
@@ -725,7 +716,6 @@ export class EIP7702TransactionBuilder {
     };
   }
 }
-
 
 // ---------------------------------------------------------------------------
 // Multi-target delegation: BasicEOABatchExecutor (ERC-7821 / BEBE)
@@ -814,7 +804,13 @@ export class BatchEOAExecutor {
       logger.info('  batchExecutor: ' + this.batchExecutor);
       for (let i = 0; i < calls.length; i++) {
         logger.info(
-          '  [' + i + '] to=' + calls[i].to + ' data=' + (calls[i].data || '0x').slice(0, 18) + '...'
+          '  [' +
+            i +
+            '] to=' +
+            calls[i].to +
+            ' data=' +
+            (calls[i].data || '0x').slice(0, 18) +
+            '...'
         );
       }
 
@@ -823,8 +819,7 @@ export class BatchEOAExecutor {
       const status = await getDelegationStatus(eoa);
       const auth = await this.authorizer.createAuthorization(status.nonce);
 
-      const gasLimit =
-        opts?.gasLimit ?? BigInt(150_000 + calls.length * 200_000);
+      const gasLimit = opts?.gasLimit ?? BigInt(150_000 + calls.length * 200_000);
 
       const sent = await sendType4Transaction(this.authority, {
         chainId: this.chainId,

@@ -90,11 +90,11 @@ export function validateSwapParams(
   }
 
   // Validate amounts are positive
-  if (!amountIn || (amountIn <= 0)) {
+  if (!amountIn || amountIn <= 0) {
     throw new Error('amountIn must be greater than 0');
   }
 
-  if (!minAmountOut || (minAmountOut < 0)) {
+  if (!minAmountOut || minAmountOut < 0) {
     throw new Error('minAmountOut must be non-negative');
   }
 

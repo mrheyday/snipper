@@ -69,9 +69,7 @@ export class PreFlightValidator {
     checks.push(await this._validateExecutorCode(params.delegatedExecutor));
 
     // 5. Check current EOA code / existing 0xef0100 designator
-    checks.push(
-      await this._validateEOADelegation(params.delegatedEOA, params.delegatedExecutor)
-    );
+    checks.push(await this._validateEOADelegation(params.delegatedEOA, params.delegatedExecutor));
 
     // 6. Under EIP-7702 self-execution, token pull is skipped — approval of the
     //    executor implementation is not required. Warn only if someone is still
@@ -160,7 +158,7 @@ export class PreFlightValidator {
       );
 
       const balance = await erc20.balanceOf(eoa);
-      const sufficient = (balance >= amountNeeded);
+      const sufficient = balance >= amountNeeded;
 
       return {
         name: 'EOA Balance',
@@ -274,8 +272,7 @@ export class PreFlightValidator {
       }
 
       if (isDelegationDesignator(code)) {
-        const matches =
-          !!delegate && delegate.toLowerCase() === expectedDelegate.toLowerCase();
+        const matches = !!delegate && delegate.toLowerCase() === expectedDelegate.toLowerCase();
         return {
           name: 'EOA Delegation',
           status: matches ? 'pass' : 'warn',
@@ -327,7 +324,7 @@ export class PreFlightValidator {
       );
 
       const allowance = await erc20.allowance(eoa, executor);
-      const sufficient = (allowance >= amountNeeded);
+      const sufficient = allowance >= amountNeeded;
 
       return {
         name: 'Token Approval',
@@ -387,7 +384,7 @@ export class PreFlightValidator {
     try {
       const balance = await this.provider.getBalance(eoa);
       const minGas = ethers.parseEther('0.001'); // ~0.001 ETH for gas
-      const sufficient = (balance >= minGas);
+      const sufficient = balance >= minGas;
 
       return {
         name: 'Gas (ETH)',

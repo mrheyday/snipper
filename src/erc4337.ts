@@ -111,7 +111,7 @@ export class ERC4337SmartWallet {
       callGasLimit: BigInt('200000'),
       verificationGasLimit: BigInt('100000'),
       preVerificationGas: BigInt('50000'),
-      maxFeePerGas: (baseFee * 2n), // 2x current base fee
+      maxFeePerGas: baseFee * 2n, // 2x current base fee
       maxPriorityFeePerGas: ethers.parseUnits('1', 'gwei'),
       paymasterAndData: '0x', // No paymaster for now
       signature: '0x', // Will be signed
@@ -176,7 +176,7 @@ export class ERC4337SmartWallet {
       callGasLimit: BigInt('400000'), // Flash loans need more gas
       verificationGasLimit: BigInt('150000'),
       preVerificationGas: BigInt('100000'),
-      maxFeePerGas: (baseFee * 2n),
+      maxFeePerGas: baseFee * 2n,
       maxPriorityFeePerGas: ethers.parseUnits('1', 'gwei'),
       paymasterAndData: '0x',
       signature: '0x',

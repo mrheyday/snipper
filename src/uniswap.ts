@@ -123,12 +123,9 @@ export function getOptimalFee(tokenA: string, tokenB: string): number {
  * @param slippagePercent Slippage tolerance in percentage (e.g., 0.5 for 0.5%)
  * @returns Minimum acceptable output
  */
-export function calculateMinimumOutput(
-  expectedOutput: bigint,
-  slippagePercent: number
-): bigint {
+export function calculateMinimumOutput(expectedOutput: bigint, slippagePercent: number): bigint {
   const slippageBps = Math.floor(slippagePercent * 100); // Convert to basis points
-  return expectedOutput * BigInt(10000 - slippageBps) / BigInt(10000);
+  return (expectedOutput * BigInt(10000 - slippageBps)) / BigInt(10000);
 }
 
 /**

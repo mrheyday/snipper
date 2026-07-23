@@ -2,24 +2,18 @@
   "mcpServers": {
     "archcore": {
       "command": "archcore",
-      "args": [
-        "mcp"
-      ]
+      "args": ["mcp"]
     },
     "sniper-searcher": {
       "command": "/Users/hs/ucai-mcp/.venv/bin/python",
-      "args": [
-        "/Users/hs/ucai-mcp/sniper-searcher-server/server.py"
-      ],
+      "args": ["/Users/hs/ucai-mcp/sniper-searcher-server/server.py"],
       "env": {
         "RPC_URL": "https://arb1.arbitrum.io/rpc"
       }
     },
     "quoter-v2": {
       "command": "/Users/hs/ucai-mcp/.venv/bin/python",
-      "args": [
-        "/Users/hs/ucai-mcp/quoter-v2-server/server.py"
-      ],
+      "args": ["/Users/hs/ucai-mcp/quoter-v2-server/server.py"],
       "env": {
         "RPC_URL": "https://arb1.arbitrum.io/rpc"
       }

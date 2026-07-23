@@ -60,8 +60,7 @@ export const ARBITRUM_DEPLOY = {
     delegatedExecutor: {
       types: ['uint256'] as const,
       args: [0n] as const,
-      encoded:
-        '0x0000000000000000000000000000000000000000000000000000000000000000',
+      encoded: '0x0000000000000000000000000000000000000000000000000000000000000000',
     },
     flashLoanReceiver: {
       types: ['address', 'address'] as const,
@@ -101,10 +100,7 @@ const DELEGATED_EXECUTOR_ADDRESS = validateAndChecksumAddress(
 // Canonical CREATE2 address (Vectorized/bebe) — same on all networks.
 // Override with BATCH_EXECUTOR_ADDRESS for a self-deployed instance.
 export const BEBE_CANONICAL_ADDRESS = ARBITRUM_DEPLOY.bebe;
-const BATCH_EXECUTOR_ADDRESS_RAW = getOptionalEnv(
-  'BATCH_EXECUTOR_ADDRESS',
-  BEBE_CANONICAL_ADDRESS
-);
+const BATCH_EXECUTOR_ADDRESS_RAW = getOptionalEnv('BATCH_EXECUTOR_ADDRESS', BEBE_CANONICAL_ADDRESS);
 const BATCH_EXECUTOR_ADDRESS = BATCH_EXECUTOR_ADDRESS_RAW
   ? validateAndChecksumAddress(BATCH_EXECUTOR_ADDRESS_RAW)
   : '';
@@ -127,8 +123,7 @@ export function getDeadline(minutes: number = DEADLINE_MINUTES): number {
 export const DEADLINE = getDeadline();
 
 /** Prefer BEBE type-4 flash initiation when signer is a Wallet and owner matches. */
-export const FLASH_USE_TYPE4 =
-  getOptionalEnv('FLASH_USE_TYPE4', 'false').toLowerCase() === 'true';
+export const FLASH_USE_TYPE4 = getOptionalEnv('FLASH_USE_TYPE4', 'false').toLowerCase() === 'true';
 
 const SLIPPAGE_BPS = parseInt(getOptionalEnv('SLIPPAGE_TOLERANCE', '50'));
 validateSlippage(SLIPPAGE_BPS);

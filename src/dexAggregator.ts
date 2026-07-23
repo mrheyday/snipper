@@ -113,7 +113,7 @@ export class DEXAggregator {
     for (const res of results) {
       if (res.status === 'fulfilled' && res.value) {
         const route = res.value;
-        if (!bestRoute || (route.amountOut > bestRoute.amountOut)) {
+        if (!bestRoute || route.amountOut > bestRoute.amountOut) {
           bestRoute = route;
         }
       }
@@ -146,9 +146,7 @@ export class DEXAggregator {
     const quotePromises: Promise<BestRouteResult | null>[] = [];
     for (const protocol of this.protocols) {
       for (const feeTier of protocol.supportedFeeTiers) {
-        quotePromises.push(
-          this.getRoundTripQuote(protocol, tokenIn, midToken, amountIn, feeTier)
-        );
+        quotePromises.push(this.getRoundTripQuote(protocol, tokenIn, midToken, amountIn, feeTier));
       }
     }
 
@@ -187,15 +185,9 @@ export class DEXAggregator {
         UNISWAP_V3_QUOTER_ABI,
         this.provider
       );
-      const pathBuf = encodePath(
-        [tokenIn, midToken, tokenIn],
-        [feeTier, feeTier]
-      );
+      const pathBuf = encodePath([tokenIn, midToken, tokenIn], [feeTier, feeTier]);
       const pathHex = ethers.hexlify(pathBuf);
-      const [amountOut]: [bigint] = await quoter.quoteExactInput.staticCall(
-        pathHex,
-        amountIn
-      );
+      const [amountOut]: [bigint] = await quoter.quoteExactInput.staticCall(pathHex, amountIn);
       if (amountOut && amountOut > 0n) {
         return {
           protocol,
@@ -204,8 +196,7 @@ export class DEXAggregator {
           feeTier,
           amountIn,
           amountOut,
-          executionPrice:
-            (amountOut * BigInt(ethers.WeiPerEther)) / BigInt(amountIn),
+          executionPrice: (amountOut * BigInt(ethers.WeiPerEther)) / BigInt(amountIn),
         };
       }
       return null;
@@ -235,7 +226,7 @@ export class DEXAggregator {
         sqrtPriceLimitX96: 0,
       });
 
-      if (amountOut && (amountOut > 0)) {
+      if (amountOut && amountOut > 0) {
         return {
           protocol,
           tokenIn,
@@ -243,7 +234,7 @@ export class DEXAggregator {
           feeTier,
           amountIn,
           amountOut,
-          executionPrice: amountOut * BigInt(ethers.WeiPerEther) / BigInt(amountIn),
+          executionPrice: (amountOut * BigInt(ethers.WeiPerEther)) / BigInt(amountIn),
         };
       }
       return null;
