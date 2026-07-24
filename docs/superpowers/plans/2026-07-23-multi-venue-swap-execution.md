@@ -3260,3 +3260,2282 @@ Expected: fork process stops. No state from this task persists anywhere real —
 - [ ] **Step 6: Report results, no commit**
 
 This task produces no code changes — it's a verification gate. Summarize the dry-run outcome (pool found, swap succeeded, event emitted) before considering this plan complete. If any step failed, that is a BLOCKED status for this task — do not proceed to declaring the plan done; escalate the specific failure.
+
+---
+
+## Amendment (2026-07-24): dual-ABI router support
+
+Task 10's fork dry-run found that SushiSwap V3's real router needs a different `exactInput` ABI
+shape than Uniswap V3/PancakeSwap V3 — see the spec's "Dual-ABI router support" section for the
+on-chain proof. Tasks 11-15 below fix this. They supersede nothing in Tasks 1-9 except the exact
+`RouterConfig` shape (Tasks 1 and 3 used a plain `address[]`; these tasks change it to a struct
+array pairing each router with an ABI-variant flag). No off-chain TypeScript file changes — the
+ABI-variant decision is entirely on-chain, per-router, invisible to callers.
+
+### Task 11: SniperSearcher.sol — dual-ABI router support (SushiSwap V3 fix)
+
+**Files:**
+- Modify: `contracts/src/SniperSearcher.sol`
+- Modify: `contracts/test/SniperSearcher.t.sol`
+- Modify: `contracts/test/FlashLoanReceiver.t.sol` (2 constructor call sites reference `SniperSearcher`'s old `address[]` constructor)
+
+**Interfaces:**
+- Produces: `SniperSearcher.RouterConfig { address router; bool legacyAbi; }`, constructor `SniperSearcher(RouterConfig[] memory initialRouters, uint256 minAmountBitLength)`, `allowRouter(address router, bool legacyAbi)` (signature changed — gains the `legacyAbi` parameter), `routerIsLegacyAbi(address) view returns (bool)`. `executeSwap`/`executeSwapWithDeadline`'s own signatures are UNCHANGED from Task 1 (still `router` as 2nd param) — only the constructor and `allowRouter` change shape, plus the internal dispatch in `_executeSwap`.
+
+- [ ] **Step 1: Replace `contracts/src/SniperSearcher.sol` with the full updated contract**
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.36;
+
+import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
+import {Multicallable} from "solady/utils/Multicallable.sol";
+import {MegaMEVOptimizationLib} from "./MegaMEVOptimizationLib.sol";
+
+/// @dev Local ERC20 surface — only balanceOf is read on-chain; rest for tooling.
+interface IERC20 {
+    function balanceOf(address account) external view returns (uint256);
+}
+
+/// @dev Uniswap-V3-style SwapRouter02 exactInput (no per-call deadline field).
+///      Used by routers registered with legacyAbi = false (Uniswap V3, PancakeSwap V3).
+interface IUniswapV3Router02 {
+    struct ExactInputParams {
+        bytes path;
+        address recipient;
+        uint256 amountIn;
+        uint256 amountOutMinimum;
+    }
+
+    function exactInput(ExactInputParams calldata params) external payable returns (uint256 amountOut);
+}
+
+/// @dev Older-generation Uniswap V3 periphery ISwapRouter exactInput — deadline INSIDE the
+///      struct. Used by routers registered with legacyAbi = true (SushiSwap V3's real deployed
+///      router on Arbitrum uses this shape, not SwapRouter02's — confirmed via mainnet-fork
+///      dry run 2026-07-24: the 4-field call reverts with empty data, the 5-field call with
+///      deadline succeeds).
+interface ILegacySwapRouter {
+    struct ExactInputParams {
+        bytes path;
+        address recipient;
+        uint256 deadline;
+        uint256 amountIn;
+        uint256 amountOutMinimum;
+    }
+
+    function exactInput(ExactInputParams calldata params) external payable returns (uint256 amountOut);
+}
+
+error Unauthorized();
+error InsufficientAmountOut(uint256 received, uint256 minimum);
+error SwapFailed();
+error DeadlineExceeded();
+error AmountTooSmall(uint256 amountIn, uint256 minBitLength);
+error InvalidPath();
+error TokenInMismatch(address expected, address pathTokenIn);
+error ZeroAddress();
+error Reentrancy();
+error RouterNotAllowed(address router);
+error NoRoutersProvided();
+
+/// @title SniperSearcher
+/// @notice Owner-scoped exact-input executor for MEV / flash-loan callers, supporting two
+///         Uniswap-V3-family router ABI shapes (SwapRouter02-style and older ISwapRouter-style).
+/// @dev Allowed executors (e.g. FlashLoanReceiver) pull tokenIn via transferFrom, swap on
+///      an allowlisted router (using the ABI shape recorded for that router), then receive
+///      tokenOut back for Aave repay or profit.
+contract SniperSearcher is Multicallable {
+    /// @dev Uni V3 single-hop path = token(20) + fee(3) + token(20) = 43 bytes.
+    uint256 private constant MIN_PATH_LENGTH = 43;
+    /// @dev Default max age for executeSwap when caller omits an explicit deadline.
+    uint256 private constant DEFAULT_DEADLINE_SECONDS = 120;
+
+    /// @param router Router contract address.
+    /// @param legacyAbi True = older ISwapRouter (5-field ExactInputParams, deadline inside).
+    ///        False = SwapRouter02-style (4-field, no deadline field).
+    struct RouterConfig {
+        address router;
+        bool legacyAbi;
+    }
+
+    address public owner;
+    uint256 public immutable chainId;
+
+    mapping(address executor => bool allowed) public allowedExecutors;
+    mapping(address router => bool allowed) public allowedRouters;
+    mapping(address router => bool legacy) public routerIsLegacyAbi;
+
+    /// @notice Min bit-length of amountIn (0 = disabled). Immutable dust short-circuit.
+    uint256 public immutable minAmountBitLength;
+
+    /// @dev Transient reentrancy lock (Cancun/Osaka tstore).
+    bool transient locked;
+
+    event Swap(address indexed tokenIn, address indexed tokenOut, uint256 amountIn, uint256 amountOut);
+    event Withdrawn(address indexed token, address indexed to, uint256 amount);
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    event ExecutorAllowed(address indexed executor);
+    event ExecutorRevoked(address indexed executor);
+    event RouterAllowed(address indexed router, bool legacyAbi);
+    event RouterRevoked(address indexed router);
+
+    modifier onlyOwner() {
+        if (msg.sender != owner) revert Unauthorized();
+        _;
+    }
+
+    modifier onlyOwnerOrAllowedExecutor() {
+        if (msg.sender != owner && !allowedExecutors[msg.sender]) revert Unauthorized();
+        _;
+    }
+
+    modifier nonReentrant() {
+        if (locked) revert Reentrancy();
+        locked = true;
+        _;
+        locked = false;
+    }
+
+    constructor(RouterConfig[] memory initialRouters, uint256 _minAmountBitLength) {
+        if (initialRouters.length == 0) revert NoRoutersProvided();
+        owner = msg.sender;
+        for (uint256 i = 0; i < initialRouters.length; ++i) {
+            address r = initialRouters[i].router;
+            if (r == address(0)) revert ZeroAddress();
+            allowedRouters[r] = true;
+            routerIsLegacyAbi[r] = initialRouters[i].legacyAbi;
+            emit RouterAllowed(r, initialRouters[i].legacyAbi);
+        }
+        minAmountBitLength = _minAmountBitLength;
+        uint256 id;
+        assembly {
+            id := chainid()
+        }
+        chainId = id;
+    }
+
+    function allowExecutor(address executor) external onlyOwner {
+        if (executor == address(0)) revert ZeroAddress();
+        allowedExecutors[executor] = true;
+        emit ExecutorAllowed(executor);
+    }
+
+    function revokeExecutor(address executor) external onlyOwner {
+        allowedExecutors[executor] = false;
+        emit ExecutorRevoked(executor);
+    }
+
+    function allowRouter(address router, bool legacyAbi) external onlyOwner {
+        if (router == address(0)) revert ZeroAddress();
+        allowedRouters[router] = true;
+        routerIsLegacyAbi[router] = legacyAbi;
+        emit RouterAllowed(router, legacyAbi);
+    }
+
+    function revokeRouter(address router) external onlyOwner {
+        allowedRouters[router] = false;
+        emit RouterRevoked(router);
+    }
+
+    function transferOwnership(address newOwner) external onlyOwner {
+        if (newOwner == address(0)) revert ZeroAddress();
+        address previous = owner;
+        owner = newOwner;
+        emit OwnershipTransferred(previous, newOwner);
+    }
+
+    /// @notice Exact-input swap with default deadline (now + 120s).
+    function executeSwap(address tokenIn, address router, uint256 amountIn, bytes calldata path, uint256 minAmountOut)
+        external
+        onlyOwnerOrAllowedExecutor
+        nonReentrant
+        returns (uint256 amountOut)
+    {
+        amountOut =
+            _executeSwap(tokenIn, router, amountIn, path, minAmountOut, block.timestamp + DEFAULT_DEADLINE_SECONDS);
+    }
+
+    /// @notice Exact-input swap with explicit deadline.
+    function executeSwapWithDeadline(
+        address tokenIn,
+        address router,
+        uint256 amountIn,
+        bytes calldata path,
+        uint256 minAmountOut,
+        uint256 deadline
+    ) external onlyOwnerOrAllowedExecutor nonReentrant returns (uint256 amountOut) {
+        amountOut = _executeSwap(tokenIn, router, amountIn, path, minAmountOut, deadline);
+    }
+
+    function withdraw(address token, address to, uint256 amount) external onlyOwner {
+        if (to == address(0)) revert ZeroAddress();
+        if (amount == 0) amount = IERC20(token).balanceOf(address(this));
+        SafeTransferLib.safeTransfer(token, to, amount);
+        emit Withdrawn(token, to, amount);
+    }
+
+    function withdrawAll(address[] calldata tokens, address to) external onlyOwner {
+        if (to == address(0)) revert ZeroAddress();
+        for (uint256 i = 0; i < tokens.length; ++i) {
+            uint256 balance = IERC20(tokens[i]).balanceOf(address(this));
+            if (balance > 0) {
+                SafeTransferLib.safeTransfer(tokens[i], to, balance);
+                emit Withdrawn(tokens[i], to, balance);
+            }
+        }
+    }
+
+    function getBalance(address token) external view returns (uint256) {
+        return IERC20(token).balanceOf(address(this));
+    }
+
+    function withdrawETH(address payable to, uint256 amount) external onlyOwner {
+        if (to == address(0)) revert ZeroAddress();
+        if (amount == 0) amount = address(this).balance;
+        SafeTransferLib.safeTransferETH(to, amount);
+    }
+
+    function emergencyWithdrawToken(address token, address to) external onlyOwner {
+        if (to == address(0)) revert ZeroAddress();
+        uint256 balance = IERC20(token).balanceOf(address(this));
+        if (balance > 0) {
+            SafeTransferLib.safeTransfer(token, to, balance);
+            emit Withdrawn(token, to, balance);
+        }
+    }
+
+    function emergencyWithdrawETH(address payable to) external onlyOwner {
+        if (to == address(0)) revert ZeroAddress();
+        uint256 balance = address(this).balance;
+        if (balance > 0) {
+            SafeTransferLib.safeTransferETH(to, balance);
+        }
+    }
+
+    receive() external payable {}
+
+    function _executeSwap(
+        address tokenIn,
+        address router,
+        uint256 amountIn,
+        bytes calldata path,
+        uint256 minAmountOut,
+        uint256 deadline
+    ) internal returns (uint256 amountOut) {
+        if (!allowedRouters[router]) revert RouterNotAllowed(router);
+        if (block.timestamp > deadline) revert DeadlineExceeded();
+        _checkMinAmount(amountIn);
+        _validatePath(tokenIn, path);
+
+        SafeTransferLib.safeTransferFrom(tokenIn, msg.sender, address(this), amountIn);
+        SafeTransferLib.safeApproveWithRetry(tokenIn, router, amountIn);
+
+        if (routerIsLegacyAbi[router]) {
+            try ILegacySwapRouter(router).exactInput(
+                ILegacySwapRouter.ExactInputParams({
+                    path: path,
+                    recipient: address(this),
+                    deadline: deadline,
+                    amountIn: amountIn,
+                    amountOutMinimum: minAmountOut
+                })
+            ) returns (uint256 out) {
+                amountOut = out;
+            } catch {
+                revert SwapFailed();
+            }
+        } else {
+            try IUniswapV3Router02(router).exactInput(
+                IUniswapV3Router02.ExactInputParams({
+                    path: path,
+                    recipient: address(this),
+                    amountIn: amountIn,
+                    amountOutMinimum: minAmountOut
+                })
+            ) returns (uint256 out) {
+                amountOut = out;
+            } catch {
+                revert SwapFailed();
+            }
+        }
+
+        SafeTransferLib.safeApprove(tokenIn, router, 0);
+
+        if (amountOut < minAmountOut) {
+            revert InsufficientAmountOut(amountOut, minAmountOut);
+        }
+
+        address tokenOut = _getTokenOut(path);
+        SafeTransferLib.safeTransfer(tokenOut, msg.sender, amountOut);
+
+        emit Swap(tokenIn, tokenOut, amountIn, amountOut);
+    }
+
+    /// @dev path = tokenIn(20) | fee(3) | ... | tokenOut(20); min one hop = 43 bytes.
+    function _validatePath(address tokenIn, bytes calldata path) internal pure {
+        if (path.length < MIN_PATH_LENGTH) revert InvalidPath();
+        if ((path.length - 20) % 23 != 0) revert InvalidPath();
+        address pathTokenIn = address(bytes20(path[0:20]));
+        if (pathTokenIn != tokenIn) revert TokenInMismatch(tokenIn, pathTokenIn);
+    }
+
+    function _getTokenOut(bytes calldata path) internal pure returns (address) {
+        return address(bytes20(path[path.length - 20:]));
+    }
+
+    function _checkMinAmount(uint256 amountIn) internal view {
+        uint256 minBits = minAmountBitLength;
+        if (minBits != 0 && MegaMEVOptimizationLib.bitLength(amountIn) < minBits) {
+            revert AmountTooSmall(amountIn, minBits);
+        }
+    }
+}
+```
+
+- [ ] **Step 2: Replace `contracts/test/SniperSearcher.t.sol` with the full updated test file**
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.36;
+
+import {Test} from "forge-std/Test.sol";
+import {SniperSearcher} from "../src/SniperSearcher.sol";
+import {ERC20Mock} from "./mocks/ERC20Mock.sol";
+
+/// @dev SwapRouter02-shaped mock (4-field, no deadline): pulls tokenIn, mints amountIn of
+///      tokenOut to recipient. Represents Uniswap V3 / PancakeSwap V3 (legacyAbi = false).
+///      Its exactInput selector differs from MockLegacyRouter02's below (different tuple
+///      shape), so calling the wrong mock with the wrong ABI naturally reverts with no
+///      matching function — the same failure signature the real SushiSwap V3 router produced
+///      when called with the wrong ABI during the mainnet-fork dry run.
+contract MockRouter02 {
+    struct ExactInputParams {
+        bytes path;
+        address recipient;
+        uint256 amountIn;
+        uint256 amountOutMinimum;
+    }
+
+    function exactInput(ExactInputParams calldata params) external payable returns (uint256 amountOut) {
+        require(params.path.length >= 43, "path");
+        address tokenIn = address(bytes20(params.path[0:20]));
+        address tokenOut = address(bytes20(params.path[params.path.length - 20:]));
+        require(ERC20Mock(tokenIn).transferFrom(msg.sender, address(this), params.amountIn), "in");
+        amountOut = params.amountIn;
+        require(amountOut >= params.amountOutMinimum, "min");
+        ERC20Mock(tokenOut).mint(params.recipient, amountOut);
+    }
+}
+
+/// @dev Older ISwapRouter-shaped mock (5-field, deadline INSIDE the struct). Represents
+///      SushiSwap V3's real deployed router (legacyAbi = true) — see
+///      docs/superpowers/specs/2026-07-23-multi-venue-swap-execution-design.md,
+///      "Dual-ABI router support", for the on-chain proof this shape is required.
+contract MockLegacyRouter02 {
+    struct ExactInputParams {
+        bytes path;
+        address recipient;
+        uint256 deadline;
+        uint256 amountIn;
+        uint256 amountOutMinimum;
+    }
+
+    function exactInput(ExactInputParams calldata params) external payable returns (uint256 amountOut) {
+        require(params.path.length >= 43, "path");
+        require(params.deadline > 0, "deadline");
+        address tokenIn = address(bytes20(params.path[0:20]));
+        address tokenOut = address(bytes20(params.path[params.path.length - 20:]));
+        require(ERC20Mock(tokenIn).transferFrom(msg.sender, address(this), params.amountIn), "in");
+        amountOut = params.amountIn;
+        require(amountOut >= params.amountOutMinimum, "min");
+        ERC20Mock(tokenOut).mint(params.recipient, amountOut);
+    }
+}
+
+contract SniperSearcherTest is Test {
+    SniperSearcher public searcher;
+    MockRouter02 public router;
+    MockRouter02 public router2;
+    MockLegacyRouter02 public legacyRouter;
+    ERC20Mock public tokenA;
+    ERC20Mock public tokenB;
+    address public owner;
+    address public user;
+    address public executor;
+
+    error Unauthorized();
+    error SwapFailed();
+    error DeadlineExceeded();
+    error InvalidPath();
+    error TokenInMismatch(address expected, address pathTokenIn);
+    error ZeroAddress();
+    error AmountTooSmall(uint256 amountIn, uint256 minBitLength);
+    error RouterNotAllowed(address router);
+    error NoRoutersProvided();
+
+    event Swap(address indexed tokenIn, address indexed tokenOut, uint256 amountIn, uint256 amountOut);
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    event RouterAllowed(address indexed router, bool legacyAbi);
+    event RouterRevoked(address indexed router);
+
+    function _oneRouter(address r, bool legacyAbi) internal pure returns (SniperSearcher.RouterConfig[] memory out) {
+        out = new SniperSearcher.RouterConfig[](1);
+        out[0] = SniperSearcher.RouterConfig({router: r, legacyAbi: legacyAbi});
+    }
+
+    function setUp() public {
+        owner = makeAddr("owner");
+        user = makeAddr("user");
+        executor = makeAddr("executor");
+
+        router = new MockRouter02();
+        router2 = new MockRouter02();
+        legacyRouter = new MockLegacyRouter02();
+        vm.prank(owner);
+        searcher = new SniperSearcher(_oneRouter(address(router), false), 0);
+
+        tokenA = new ERC20Mock("Token A", "TKNA", 18);
+        tokenB = new ERC20Mock("Token B", "TKNB", 18);
+
+        tokenA.mint(owner, 1000e18);
+        tokenA.mint(user, 1000e18);
+        tokenA.mint(executor, 1000e18);
+    }
+
+    function _pathAB() internal view returns (bytes memory) {
+        return abi.encodePacked(address(tokenA), uint24(3000), address(tokenB));
+    }
+
+    function test_Deployment() public view {
+        assertEq(searcher.owner(), owner);
+        assertTrue(searcher.allowedRouters(address(router)));
+        assertFalse(searcher.routerIsLegacyAbi(address(router)));
+        assertEq(searcher.chainId(), block.chainid);
+    }
+
+    function test_RevertWhen_ZeroRouterInInitialList() public {
+        vm.expectRevert(ZeroAddress.selector);
+        new SniperSearcher(_oneRouter(address(0), false), 0);
+    }
+
+    function test_RevertWhen_NoRoutersProvided() public {
+        SniperSearcher.RouterConfig[] memory routers = new SniperSearcher.RouterConfig[](0);
+        vm.expectRevert(NoRoutersProvided.selector);
+        new SniperSearcher(routers, 0);
+    }
+
+    function test_RevertWhen_UnauthorizedCaller() public {
+        bytes memory path = _pathAB();
+        vm.prank(user);
+        vm.expectRevert(Unauthorized.selector);
+        searcher.executeSwap(address(tokenA), address(router), 100e18, path, 0);
+    }
+
+    function test_ExecuteSwap_Success_ReturnsOutToCaller() public {
+        bytes memory path = _pathAB();
+        uint256 amountIn = 100e18;
+
+        vm.startPrank(owner);
+        tokenA.approve(address(searcher), amountIn);
+        uint256 out = searcher.executeSwap(address(tokenA), address(router), amountIn, path, amountIn);
+        vm.stopPrank();
+
+        assertEq(out, amountIn);
+        assertEq(tokenB.balanceOf(owner), amountIn);
+        assertEq(tokenB.balanceOf(address(searcher)), 0);
+        assertEq(tokenA.allowance(address(searcher), address(router)), 0);
+    }
+
+    function test_RevertWhen_RouterNotAllowed() public {
+        bytes memory path = _pathAB();
+        uint256 amountIn = 100e18;
+
+        vm.startPrank(owner);
+        tokenA.approve(address(searcher), amountIn);
+        vm.expectRevert(abi.encodeWithSelector(RouterNotAllowed.selector, address(router2)));
+        searcher.executeSwap(address(tokenA), address(router2), amountIn, path, 0);
+        vm.stopPrank();
+    }
+
+    function test_AllowRouter_ThenSwapSucceeds() public {
+        bytes memory path = _pathAB();
+        uint256 amountIn = 100e18;
+
+        vm.prank(owner);
+        vm.expectEmit(true, false, false, false);
+        emit RouterAllowed(address(router2), false);
+        searcher.allowRouter(address(router2), false);
+
+        vm.startPrank(owner);
+        tokenA.approve(address(searcher), amountIn);
+        uint256 out = searcher.executeSwap(address(tokenA), address(router2), amountIn, path, amountIn);
+        vm.stopPrank();
+
+        assertEq(out, amountIn);
+        assertEq(tokenB.balanceOf(owner), amountIn);
+    }
+
+    function test_RevokeRouter_ThenSwapReverts() public {
+        vm.prank(owner);
+        vm.expectEmit(true, false, false, false);
+        emit RouterRevoked(address(router));
+        searcher.revokeRouter(address(router));
+
+        bytes memory path = _pathAB();
+        vm.startPrank(owner);
+        tokenA.approve(address(searcher), 100e18);
+        vm.expectRevert(abi.encodeWithSelector(RouterNotAllowed.selector, address(router)));
+        searcher.executeSwap(address(tokenA), address(router), 100e18, path, 0);
+        vm.stopPrank();
+    }
+
+    function test_RevertWhen_AllowRouter_NotOwner() public {
+        vm.prank(user);
+        vm.expectRevert(Unauthorized.selector);
+        searcher.allowRouter(address(router2), false);
+    }
+
+    function test_LegacyRouter_ExecutesViaFiveFieldABI() public {
+        vm.prank(owner);
+        searcher.allowRouter(address(legacyRouter), true);
+        assertTrue(searcher.routerIsLegacyAbi(address(legacyRouter)));
+
+        bytes memory path = _pathAB();
+        uint256 amountIn = 100e18;
+
+        vm.startPrank(owner);
+        tokenA.approve(address(searcher), amountIn);
+        uint256 out = searcher.executeSwap(address(tokenA), address(legacyRouter), amountIn, path, amountIn);
+        vm.stopPrank();
+
+        assertEq(out, amountIn);
+        assertEq(tokenB.balanceOf(owner), amountIn);
+    }
+
+    function test_LegacyRouter_CalledWithWrongAbiShape_Reverts() public {
+        // A router registered as SwapRouter02-style (legacyAbi=false) but which is actually a
+        // MockLegacyRouter02 (5-field) has no matching 4-field selector, so the call reverts —
+        // this proves the branch actually dispatches a different call, not just a different
+        // struct value on the same call.
+        vm.prank(owner);
+        searcher.allowRouter(address(legacyRouter), false);
+
+        bytes memory path = _pathAB();
+        vm.startPrank(owner);
+        tokenA.approve(address(searcher), 100e18);
+        vm.expectRevert(SwapFailed.selector);
+        searcher.executeSwap(address(tokenA), address(legacyRouter), 100e18, path, 0);
+        vm.stopPrank();
+    }
+
+    function test_AllowedExecutor_CanSwapAndReceivesOut() public {
+        bytes memory path = _pathAB();
+        uint256 amountIn = 50e18;
+
+        vm.prank(owner);
+        searcher.allowExecutor(executor);
+
+        vm.startPrank(executor);
+        tokenA.approve(address(searcher), amountIn);
+        uint256 out = searcher.executeSwap(address(tokenA), address(router), amountIn, path, 0);
+        vm.stopPrank();
+
+        assertEq(out, amountIn);
+        assertEq(tokenB.balanceOf(executor), amountIn);
+    }
+
+    function test_RevertWhen_PathTooShort() public {
+        vm.startPrank(owner);
+        tokenA.approve(address(searcher), 100e18);
+        vm.expectRevert(InvalidPath.selector);
+        searcher.executeSwap(address(tokenA), address(router), 100e18, abi.encodePacked(address(tokenA)), 0);
+        vm.stopPrank();
+    }
+
+    function test_RevertWhen_TokenInMismatch() public {
+        bytes memory path = _pathAB();
+        vm.startPrank(owner);
+        tokenA.approve(address(searcher), 100e18);
+        vm.expectRevert(abi.encodeWithSelector(TokenInMismatch.selector, address(tokenB), address(tokenA)));
+        searcher.executeSwap(address(tokenB), address(router), 100e18, path, 0);
+        vm.stopPrank();
+    }
+
+    function test_RevertWhen_DeadlineExceeded() public {
+        bytes memory path = _pathAB();
+        vm.startPrank(owner);
+        tokenA.approve(address(searcher), 100e18);
+        vm.expectRevert(DeadlineExceeded.selector);
+        searcher.executeSwapWithDeadline(address(tokenA), address(router), 100e18, path, 0, block.timestamp - 1);
+        vm.stopPrank();
+    }
+
+    function test_ExecuteSwapWithDeadline_Success() public {
+        bytes memory path = _pathAB();
+        uint256 amountIn = 100e18;
+
+        vm.startPrank(owner);
+        tokenA.approve(address(searcher), amountIn);
+        uint256 out = searcher.executeSwapWithDeadline(
+            address(tokenA), address(router), amountIn, path, amountIn, block.timestamp + 60
+        );
+        vm.stopPrank();
+
+        assertEq(out, amountIn);
+    }
+
+    function test_TransferOwnership() public {
+        address newOwner = makeAddr("newOwner");
+        vm.prank(owner);
+        vm.expectEmit(true, true, false, false);
+        emit OwnershipTransferred(owner, newOwner);
+        searcher.transferOwnership(newOwner);
+        assertEq(searcher.owner(), newOwner);
+    }
+
+    function test_RevertWhen_TransferOwnershipZero() public {
+        vm.prank(owner);
+        vm.expectRevert(ZeroAddress.selector);
+        searcher.transferOwnership(address(0));
+    }
+
+    function test_Withdraw() public {
+        tokenB.mint(address(searcher), 50e18);
+        address to = makeAddr("to");
+        vm.prank(owner);
+        searcher.withdraw(address(tokenB), to, 0);
+        assertEq(tokenB.balanceOf(to), 50e18);
+    }
+
+    function test_WithdrawAll() public {
+        tokenA.mint(address(searcher), 10e18);
+        tokenB.mint(address(searcher), 20e18);
+        address to = makeAddr("to");
+        address[] memory tokens = new address[](2);
+        tokens[0] = address(tokenA);
+        tokens[1] = address(tokenB);
+        vm.prank(owner);
+        searcher.withdrawAll(tokens, to);
+        assertEq(tokenA.balanceOf(to), 10e18);
+        assertEq(tokenB.balanceOf(to), 20e18);
+    }
+
+    function test_GetBalance() public {
+        tokenA.mint(address(searcher), 5e18);
+        assertEq(searcher.getBalance(address(tokenA)), 5e18);
+    }
+
+    function test_ReceiveETH() public {
+        (bool success,) = payable(address(searcher)).call{value: 1 ether}("");
+        require(success);
+        assertEq(address(searcher).balance, 1 ether);
+    }
+
+    function test_Fuzz_WithdrawAmount(uint256 amount) public {
+        amount = bound(amount, 1, 1_000_000e18);
+        tokenA.mint(address(searcher), amount);
+        address to = makeAddr("to");
+        vm.prank(owner);
+        searcher.withdraw(address(tokenA), to, amount);
+        assertEq(tokenA.balanceOf(to), amount);
+    }
+
+    function test_MinAmountBitLength_DisabledByDefault() public view {
+        assertEq(searcher.minAmountBitLength(), 0);
+    }
+
+    function test_MinAmountBitLength_RevertsOnDustBeforeAnyExternalCall() public {
+        vm.startPrank(owner);
+        SniperSearcher strict = new SniperSearcher(_oneRouter(address(router), false), 32);
+
+        bytes memory path = _pathAB();
+        tokenA.approve(address(strict), 1);
+        vm.expectRevert(abi.encodeWithSelector(AmountTooSmall.selector, uint256(1), uint256(32)));
+        strict.executeSwap(address(tokenA), address(router), 1, path, 0);
+        vm.stopPrank();
+    }
+
+    function test_MinAmountBitLength_GasSavedOnRejectedDust() public {
+        vm.startPrank(owner);
+        SniperSearcher strict = new SniperSearcher(_oneRouter(address(router), false), 32);
+
+        bytes memory path = _pathAB();
+        tokenA.approve(address(strict), 1);
+        uint256 gasBefore = gasleft();
+        try strict.executeSwap(address(tokenA), address(router), 1, path, 0) {
+            revert("expected revert");
+        } catch {
+            uint256 gasUsed = gasBefore - gasleft();
+            assertLt(gasUsed, 50_000);
+        }
+        vm.stopPrank();
+    }
+
+    function test_Multicall_BatchesOwnerCallsWithCorrectSender() public {
+        bytes[] memory calls = new bytes[](2);
+        calls[0] = abi.encodeCall(SniperSearcher.allowExecutor, (executor));
+        calls[1] = abi.encodeCall(SniperSearcher.allowRouter, (address(router2), false));
+        vm.prank(owner);
+        searcher.multicall(calls);
+        assertTrue(searcher.allowedExecutors(executor));
+        assertTrue(searcher.allowedRouters(address(router2)));
+    }
+
+    function test_Multicall_RevertsForNonOwner() public {
+        bytes[] memory calls = new bytes[](1);
+        calls[0] = abi.encodeCall(SniperSearcher.allowExecutor, (executor));
+        vm.prank(user);
+        vm.expectRevert(Unauthorized.selector);
+        searcher.multicall(calls);
+    }
+
+    function test_RevokeExecutor() public {
+        vm.startPrank(owner);
+        searcher.allowExecutor(executor);
+        assertTrue(searcher.allowedExecutors(executor));
+        searcher.revokeExecutor(executor);
+        assertFalse(searcher.allowedExecutors(executor));
+        vm.stopPrank();
+    }
+}
+```
+
+- [ ] **Step 3: Update the 2 constructor call sites in `contracts/test/FlashLoanReceiver.t.sol` that still use `SniperSearcher`'s old `address[]` constructor**
+
+Replace (in `setUp()`):
+
+```solidity
+        router = new MockRouter02();
+        address[] memory routers = new address[](1);
+        routers[0] = address(router);
+        searcher = new SniperSearcher(routers, 0);
+```
+
+with:
+
+```solidity
+        router = new MockRouter02();
+        SniperSearcher.RouterConfig[] memory routers = new SniperSearcher.RouterConfig[](1);
+        routers[0] = SniperSearcher.RouterConfig({router: address(router), legacyAbi: false});
+        searcher = new SniperSearcher(routers, 0);
+```
+
+Replace (in `test_ExecuteOperation_RevertsWhenExecutorNotAllowed`):
+
+```solidity
+        // Fresh searcher without allowExecutor
+        address[] memory routers = new address[](1);
+        routers[0] = address(router);
+        SniperSearcher locked = new SniperSearcher(routers, 0);
+```
+
+with:
+
+```solidity
+        // Fresh searcher without allowExecutor
+        SniperSearcher.RouterConfig[] memory routers = new SniperSearcher.RouterConfig[](1);
+        routers[0] = SniperSearcher.RouterConfig({router: address(router), legacyAbi: false});
+        SniperSearcher locked = new SniperSearcher(routers, 0);
+```
+
+- [ ] **Step 4: Run the SniperSearcher and FlashLoanReceiver test suites**
+
+Run: `cd contracts && forge test --match-contract "SniperSearcherTest|FlashLoanReceiverTest" -vv`
+Expected: all tests PASS, including the two new `test_LegacyRouter_*` cases.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add contracts/src/SniperSearcher.sol contracts/test/SniperSearcher.t.sol contracts/test/FlashLoanReceiver.t.sol
+git commit -m "fix: dual-ABI router dispatch on SniperSearcher (SushiSwap V3 fix)"
+```
+
+---
+
+### Task 12: DelegatedExecutor.sol — dual-ABI router support (SushiSwap V3 fix)
+
+**Files:**
+- Modify: `contracts/src/DelegatedExecutor.sol`
+- Modify: `contracts/test/DelegatedExecutor.t.sol`
+- Modify: `contracts/test/SecurityAudit.t.sol` (constructs `DelegatedExecutor` with the old `address[]` constructor and calls its swap entrypoints without the now-unchanged `router` param — only the constructor call needs updating, the swap calls already pass `router` from Task 3)
+
+**Interfaces:**
+- Consumes: nothing new from other tasks.
+- Produces: `DelegatedExecutor.RouterConfig { address router; bool legacyAbi; }`, constructor `DelegatedExecutor(RouterConfig[] memory initialRouters, uint256 minAmountBitLength)`, `allowRouter(address router, bool legacyAbi)` (signature changed), `routerIsLegacyAbi(address) view returns (bool)`. Adds a shared internal `_exactInput(address router, bytes calldata path, uint256 amountIn, uint256 minAmountOut, uint256 deadline) returns (uint256)` helper used by all three swap entrypoints instead of each duplicating the try/catch — a deliberate small DRY improvement while touching this code, not scope creep (the duplication was flagged as pre-existing/Minor during Task 3's review; this removes it as a natural consequence of adding a second branch, rather than tripling the duplication).
+
+- [ ] **Step 1: Replace `contracts/src/DelegatedExecutor.sol` with the full updated contract**
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.36;
+
+import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
+import {Multicallable} from "solady/utils/Multicallable.sol";
+import {MegaMEVOptimizationLib} from "./MegaMEVOptimizationLib.sol";
+
+/// @dev Minimal ERC20 surface for rescue balance queries.
+interface IERC20Like {
+    function balanceOf(address account) external view returns (uint256);
+}
+
+/// @dev Uniswap-V3-style SwapRouter02 exactInput — struct form, NO per-call deadline.
+///      Selector: exactInput((bytes,address,uint256,uint256)) = 0xb858183f
+///      Used by routers registered with legacyAbi = false (Uniswap V3, PancakeSwap V3).
+interface IUniswapV3Router02 {
+    struct ExactInputParams {
+        bytes path;
+        address recipient;
+        uint256 amountIn;
+        uint256 amountOutMinimum;
+    }
+
+    function exactInput(ExactInputParams calldata params) external payable returns (uint256 amountOut);
+}
+
+/// @dev Older-generation Uniswap V3 periphery ISwapRouter exactInput — deadline INSIDE the
+///      struct. Used by routers registered with legacyAbi = true (SushiSwap V3's real deployed
+///      router on Arbitrum uses this shape — confirmed via mainnet-fork dry run 2026-07-24).
+interface ILegacySwapRouter {
+    struct ExactInputParams {
+        bytes path;
+        address recipient;
+        uint256 deadline;
+        uint256 amountIn;
+        uint256 amountOutMinimum;
+    }
+
+    function exactInput(ExactInputParams calldata params) external payable returns (uint256 amountOut);
+}
+
+error SwapFailed();
+error TransferFailed();
+error DeadlineExceeded();
+error AmountTooSmall(uint256 amountIn, uint256 minBitLength);
+error InvalidPath();
+error TokenInMismatch(address expected, address pathTokenIn);
+error CallbackDisabled();
+error ZeroAddress();
+error RouterNotAllowed(address router);
+error NoRoutersProvided();
+
+/// @title DelegatedExecutor
+/// @notice Contract for EIP-7702 EOA delegation
+/// @dev Allows EOA to execute swaps without pre-deployment via account code delegation.
+///      Supports two Uniswap-V3-family router ABI shapes per allowlisted router (see
+///      SniperSearcher.sol's identical treatment for why).
+contract DelegatedExecutor is Multicallable {
+    // Reentrancy guard using transient storage (0.8.28+)
+    bytes32 private transient locked;
+
+    /// @param router Router contract address.
+    /// @param legacyAbi True = older ISwapRouter (5-field ExactInputParams, deadline inside).
+    ///        False = SwapRouter02-style (4-field, no deadline field).
+    struct RouterConfig {
+        address router;
+        bool legacyAbi;
+    }
+
+    // Access control: mapping of allowed EOAs
+    mapping(address eoa => bool allowed) public allowedEOAs;
+    mapping(address router => bool allowed) public allowedRouters;
+    mapping(address router => bool legacy) public routerIsLegacyAbi;
+    address public owner;
+
+    /// @notice Minimum bit-length (via the native CLZ opcode) an `amountIn` must have to
+    ///         proceed to the swap. 0 disables the check. Set once at deployment (immutable,
+    ///         not owner-settable) to keep deployed bytecode small.
+    uint256 public immutable minAmountBitLength;
+
+    event Swap(address indexed tokenIn, address indexed tokenOut, uint256 amountIn, uint256 amountOut);
+    event Delegated(address indexed eoa, bytes32 nonce);
+    event EOAAllowed(address indexed eoa);
+    event EOARevoked(address indexed eoa);
+    event RouterAllowed(address indexed router, bool legacyAbi);
+    event RouterRevoked(address indexed router);
+
+    // Reentrancy guard modifier using transient storage
+    modifier nonReentrant() {
+        require(locked == bytes32(0), "Reentrancy detected");
+        locked = bytes32(uint256(1));
+        _;
+        locked = bytes32(0);
+    }
+
+    // Access control modifier.
+    // Under EIP-7702 the EOA calls *itself* (address(this) == msg.sender) with
+    // delegated code; that self-call is always authorized. Pre-deployed use still
+    // requires the caller to be on the allow-list.
+    modifier onlyAllowedEOA() {
+        require(
+            msg.sender == address(this) || allowedEOAs[msg.sender],
+            "EOA not authorized"
+        );
+        _;
+    }
+
+    /// @dev Pull `amount` of `token` into this account when needed.
+    ///      Under EIP-7702 self-execution, tokens already sit on the EOA so the
+    ///      transferFrom is skipped (and would fail without a self-allowance).
+    function _pullIn(address token, uint256 amount) internal {
+        if (msg.sender == address(this)) {
+            // Tokens are already on the delegated EOA; nothing to pull.
+            return;
+        }
+        SafeTransferLib.safeTransferFrom(token, msg.sender, address(this), amount);
+    }
+
+    /// @dev Recipient for swap outputs: keep funds on the account executing the
+    ///      code (EOA under 7702, or this contract when called externally).
+    function _recipient() internal view returns (address) {
+        return address(this);
+    }
+
+    // Owner control modifier
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Only owner");
+        _;
+    }
+
+    constructor(RouterConfig[] memory initialRouters, uint256 _minAmountBitLength) {
+        if (initialRouters.length == 0) revert NoRoutersProvided();
+        owner = msg.sender;
+        allowedEOAs[msg.sender] = true;
+        for (uint256 i = 0; i < initialRouters.length; ++i) {
+            address r = initialRouters[i].router;
+            if (r == address(0)) revert ZeroAddress();
+            allowedRouters[r] = true;
+            routerIsLegacyAbi[r] = initialRouters[i].legacyAbi;
+            emit RouterAllowed(r, initialRouters[i].legacyAbi);
+        }
+        minAmountBitLength = _minAmountBitLength;
+    }
+
+    /// @notice Allow an EOA to use this delegated executor
+    function allowEOA(address eoa) external onlyOwner {
+        require(eoa != address(0), "Invalid address");
+        allowedEOAs[eoa] = true;
+        emit EOAAllowed(eoa);
+    }
+
+    /// @notice Revoke an EOA's access
+    function revokeEOA(address eoa) external onlyOwner {
+        allowedEOAs[eoa] = false;
+        emit EOARevoked(eoa);
+    }
+
+    /// @notice Allow a router to be used as the swap venue
+    function allowRouter(address router, bool legacyAbi) external onlyOwner {
+        if (router == address(0)) revert ZeroAddress();
+        allowedRouters[router] = true;
+        routerIsLegacyAbi[router] = legacyAbi;
+        emit RouterAllowed(router, legacyAbi);
+    }
+
+    /// @notice Revoke a router
+    function revokeRouter(address router) external onlyOwner {
+        allowedRouters[router] = false;
+        emit RouterRevoked(router);
+    }
+
+    /// @dev Dispatch exactInput to the right ABI shape for `router`, both wrapped identically.
+    function _exactInput(
+        address router,
+        bytes calldata path,
+        uint256 amountIn,
+        uint256 minAmountOut,
+        uint256 deadline
+    ) internal returns (uint256 amountOut) {
+        if (routerIsLegacyAbi[router]) {
+            try ILegacySwapRouter(router).exactInput(
+                ILegacySwapRouter.ExactInputParams({
+                    path: path,
+                    recipient: _recipient(),
+                    deadline: deadline,
+                    amountIn: amountIn,
+                    amountOutMinimum: minAmountOut
+                })
+            ) returns (uint256 out) {
+                amountOut = out;
+            } catch {
+                revert SwapFailed();
+            }
+        } else {
+            try IUniswapV3Router02(router).exactInput(
+                IUniswapV3Router02.ExactInputParams({
+                    path: path,
+                    recipient: _recipient(),
+                    amountIn: amountIn,
+                    amountOutMinimum: minAmountOut
+                })
+            ) returns (uint256 out) {
+                amountOut = out;
+            } catch {
+                revert SwapFailed();
+            }
+        }
+    }
+
+    /// @notice Execute swap via EIP-7702 delegation
+    /// @dev Called when EOA code points to this contract (via SetCode tx)
+    /// @param tokenIn Input token
+    /// @param router Allowlisted router to swap against
+    /// @param amountIn Input amount
+    /// @param path Encoded swap path
+    /// @param minAmountOut Minimum output
+    /// @param deadline Tx deadline
+    function executeSwap(
+        address tokenIn,
+        address router,
+        uint256 amountIn,
+        bytes calldata path,
+        uint256 minAmountOut,
+        uint256 deadline
+    ) external nonReentrant onlyAllowedEOA returns (uint256 amountOut) {
+        if (!allowedRouters[router]) revert RouterNotAllowed(router);
+        if (block.timestamp > deadline) revert DeadlineExceeded();
+        _checkMinAmount(amountIn);
+        _validatePath(tokenIn, path);
+
+        // Under EIP-7702, tokens already sit on the EOA (address(this)); externally
+        // they are pulled from msg.sender into this contract first.
+        _pullIn(tokenIn, amountIn);
+
+        SafeTransferLib.safeApproveWithRetry(tokenIn, router, amountIn);
+
+        amountOut = _exactInput(router, path, amountIn, minAmountOut, deadline);
+
+        SafeTransferLib.safeApprove(tokenIn, router, 0);
+
+        // Under 7702 funds stay on the EOA; external allowlisted callers get tokenOut back.
+        address tokenOut = _getTokenOut(path);
+        if (msg.sender != address(this)) {
+            SafeTransferLib.safeTransfer(tokenOut, msg.sender, amountOut);
+        }
+
+        emit Swap(tokenIn, tokenOut, amountIn, amountOut);
+    }
+
+    /// @notice Multi-hop swap with callback support
+    /// @dev Advanced execution for complex paths
+    /// @dev Callbacks are restricted to whitelisted functions for security
+    function executeSwapWithCallback(
+        address tokenIn,
+        address router,
+        uint256 amountIn,
+        bytes calldata path,
+        uint256 minAmountOut,
+        uint256 deadline,
+        bytes calldata callbackData
+    ) external nonReentrant onlyAllowedEOA returns (uint256 amountOut) {
+        if (!allowedRouters[router]) revert RouterNotAllowed(router);
+        if (block.timestamp > deadline) revert DeadlineExceeded();
+        _checkMinAmount(amountIn);
+        _validatePath(tokenIn, path);
+        // Callback path disabled until an explicit selector allowlist is productized.
+        if (callbackData.length > 0) revert CallbackDisabled();
+
+        _pullIn(tokenIn, amountIn);
+        SafeTransferLib.safeApproveWithRetry(tokenIn, router, amountIn);
+
+        amountOut = _exactInput(router, path, amountIn, minAmountOut, deadline);
+
+        SafeTransferLib.safeApprove(tokenIn, router, 0);
+
+        // Output already on this account under 7702; when called externally, forward it.
+        address tokenOut = _getTokenOut(path);
+        if (msg.sender != address(this)) {
+            SafeTransferLib.safeTransfer(tokenOut, msg.sender, amountOut);
+        }
+
+        emit Swap(tokenIn, tokenOut, amountIn, amountOut);
+    }
+
+    /// @notice Batch execute multiple swaps atomically, all against the same router
+    /// @dev All swaps execute in order; if one fails, entire transaction reverts
+    struct SwapRequest {
+        address tokenIn;
+        uint256 amountIn;
+        bytes path;
+        uint256 minAmountOut;
+    }
+
+    function executeBatchSwaps(SwapRequest[] calldata swaps, address router, uint256 deadline)
+        external
+        nonReentrant
+        onlyAllowedEOA
+        returns (uint256[] memory amountsOut)
+    {
+        if (!allowedRouters[router]) revert RouterNotAllowed(router);
+        if (block.timestamp > deadline) revert DeadlineExceeded();
+
+        amountsOut = new uint256[](swaps.length);
+
+        for (uint256 i = 0; i < swaps.length; ++i) {
+            SwapRequest calldata swap = swaps[i];
+            _checkMinAmount(swap.amountIn);
+            _validatePath(swap.tokenIn, swap.path);
+
+            _pullIn(swap.tokenIn, swap.amountIn);
+            SafeTransferLib.safeApproveWithRetry(swap.tokenIn, router, swap.amountIn);
+
+            amountsOut[i] = _exactInput(router, swap.path, swap.amountIn, swap.minAmountOut, deadline);
+
+            SafeTransferLib.safeApprove(swap.tokenIn, router, 0);
+
+            address tokenOut = _getTokenOut(swap.path);
+            if (msg.sender != address(this)) {
+                SafeTransferLib.safeTransfer(tokenOut, msg.sender, amountsOut[i]);
+            }
+
+            emit Swap(swap.tokenIn, tokenOut, swap.amountIn, amountsOut[i]);
+        }
+    }
+
+    /// @notice Owner rescue for ERC20 stuck on the *implementation* (not 7702 EOA storage).
+    /// @dev Under EIP-7702, `owner` lives in the EOA's storage slot and is typically unset
+    ///      (zero); rescue is intended for the pre-deployed contract address only.
+    function rescueToken(address token, address to, uint256 amount) external onlyOwner {
+        if (to == address(0)) revert ZeroAddress();
+        if (amount == 0) amount = IERC20Like(token).balanceOf(address(this));
+        SafeTransferLib.safeTransfer(token, to, amount);
+    }
+
+    /// @notice Owner rescue for ETH stuck on the implementation.
+    function rescueETH(address payable to, uint256 amount) external onlyOwner {
+        if (to == address(0)) revert ZeroAddress();
+        if (amount == 0) amount = address(this).balance;
+        SafeTransferLib.safeTransferETH(to, amount);
+    }
+
+    /// @notice Receive tokens (for fallback swaps)
+    receive() external payable {}
+
+    /// @dev Uni V3 path = tokenIn(20) | fee(3) | ... | tokenOut(20); min one hop = 43 bytes.
+    function _validatePath(address tokenIn, bytes calldata path) internal pure {
+        if (path.length < 43) revert InvalidPath();
+        if ((path.length - 20) % 23 != 0) revert InvalidPath();
+        address pathTokenIn = address(bytes20(path[0:20]));
+        if (pathTokenIn != tokenIn) revert TokenInMismatch(tokenIn, pathTokenIn);
+    }
+
+    /// @dev Internal: extract output token from Uniswap V3 path
+    function _getTokenOut(bytes calldata path) internal pure returns (address) {
+        if (path.length < 20) revert InvalidPath();
+        return address(bytes20(path[path.length - 20:]));
+    }
+
+    /// @dev Reverts cheaply (native CLZ opcode, no external calls) if `amountIn` is too small
+    ///      to be worth the transferFrom + approve + router call that would otherwise follow.
+    function _checkMinAmount(uint256 amountIn) internal view {
+        uint256 minBits = minAmountBitLength;
+        if (minBits != 0 && MegaMEVOptimizationLib.bitLength(amountIn) < minBits) {
+            revert AmountTooSmall(amountIn, minBits);
+        }
+    }
+}
+```
+
+- [ ] **Step 2: Replace `contracts/test/DelegatedExecutor.t.sol` with the full updated test file**
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.36;
+
+import {Test, console} from "forge-std/Test.sol";
+import {DelegatedExecutor} from "../src/DelegatedExecutor.sol";
+import {ERC20Mock} from "./mocks/ERC20Mock.sol";
+
+/// @dev SwapRouter02-shaped mock (4-field, no deadline): pulls tokenIn, mints amountIn of
+///      tokenOut to recipient. Represents Uniswap V3 / PancakeSwap V3 (legacyAbi = false).
+contract MockRouter02 {
+    struct ExactInputParams {
+        bytes path;
+        address recipient;
+        uint256 amountIn;
+        uint256 amountOutMinimum;
+    }
+
+    function exactInput(ExactInputParams calldata params) external payable returns (uint256 amountOut) {
+        require(params.path.length >= 43, "path");
+        address tokenIn = address(bytes20(params.path[0:20]));
+        address tokenOut = address(bytes20(params.path[params.path.length - 20:]));
+        require(ERC20Mock(tokenIn).transferFrom(msg.sender, address(this), params.amountIn), "in");
+        amountOut = params.amountIn;
+        require(amountOut >= params.amountOutMinimum, "min");
+        ERC20Mock(tokenOut).mint(params.recipient, amountOut);
+    }
+}
+
+/// @dev Older ISwapRouter-shaped mock (5-field, deadline INSIDE the struct). Represents
+///      SushiSwap V3's real deployed router (legacyAbi = true).
+contract MockLegacyRouter02 {
+    struct ExactInputParams {
+        bytes path;
+        address recipient;
+        uint256 deadline;
+        uint256 amountIn;
+        uint256 amountOutMinimum;
+    }
+
+    function exactInput(ExactInputParams calldata params) external payable returns (uint256 amountOut) {
+        require(params.path.length >= 43, "path");
+        require(params.deadline > 0, "deadline");
+        address tokenIn = address(bytes20(params.path[0:20]));
+        address tokenOut = address(bytes20(params.path[params.path.length - 20:]));
+        require(ERC20Mock(tokenIn).transferFrom(msg.sender, address(this), params.amountIn), "in");
+        amountOut = params.amountIn;
+        require(amountOut >= params.amountOutMinimum, "min");
+        ERC20Mock(tokenOut).mint(params.recipient, amountOut);
+    }
+}
+
+contract DelegatedExecutorTest is Test {
+    DelegatedExecutor public executor;
+    MockRouter02 public router;
+    MockRouter02 public router2;
+    MockLegacyRouter02 public legacyRouter;
+    ERC20Mock public tokenA;
+    ERC20Mock public tokenB;
+    address public user;
+
+    error DeadlineExceeded();
+    error SwapFailed();
+    error InvalidPath();
+    error CallbackDisabled();
+    error RouterNotAllowed(address router);
+    error NoRoutersProvided();
+    error ZeroAddress();
+
+    event Swap(address indexed tokenIn, address indexed tokenOut, uint256 amountIn, uint256 amountOut);
+    event RouterAllowed(address indexed router, bool legacyAbi);
+    event RouterRevoked(address indexed router);
+
+    function _oneRouter(address r, bool legacyAbi)
+        internal
+        pure
+        returns (DelegatedExecutor.RouterConfig[] memory out)
+    {
+        out = new DelegatedExecutor.RouterConfig[](1);
+        out[0] = DelegatedExecutor.RouterConfig({router: r, legacyAbi: legacyAbi});
+    }
+
+    function setUp() public {
+        router = new MockRouter02();
+        router2 = new MockRouter02();
+        legacyRouter = new MockLegacyRouter02();
+        executor = new DelegatedExecutor(_oneRouter(address(router), false), 0);
+        tokenA = new ERC20Mock("Token A", "TKNA", 18);
+        tokenB = new ERC20Mock("Token B", "TKNB", 6);
+
+        user = makeAddr("user");
+        tokenA.mint(user, 1000e18);
+        tokenB.mint(address(this), 10000e6);
+    }
+
+    function test_RevertWhen_NoRoutersProvided() public {
+        DelegatedExecutor.RouterConfig[] memory routers = new DelegatedExecutor.RouterConfig[](0);
+        vm.expectRevert(NoRoutersProvided.selector);
+        new DelegatedExecutor(routers, 0);
+    }
+
+    function test_ExecuteSwap_Success() public {
+        uint256 amountIn = 100e18;
+        bytes memory path = abi.encodePacked(address(tokenA), uint24(3000), address(tokenB));
+        uint256 deadline = block.timestamp + 300;
+
+        tokenA.mint(user, amountIn);
+        executor.allowEOA(user);
+
+        vm.startPrank(user);
+        tokenA.approve(address(executor), amountIn);
+        uint256 amountOut = executor.executeSwap(address(tokenA), address(router), amountIn, path, 0, deadline);
+        vm.stopPrank();
+
+        assertEq(amountOut, amountIn);
+        assertEq(tokenB.balanceOf(user), amountIn);
+    }
+
+    function test_RevertWhen_RouterNotAllowed() public {
+        uint256 amountIn = 100e18;
+        bytes memory path = abi.encodePacked(address(tokenA), uint24(3000), address(tokenB));
+        executor.allowEOA(user);
+
+        vm.startPrank(user);
+        tokenA.approve(address(executor), amountIn);
+        vm.expectRevert(abi.encodeWithSelector(RouterNotAllowed.selector, address(router2)));
+        executor.executeSwap(address(tokenA), address(router2), amountIn, path, 0, block.timestamp + 300);
+        vm.stopPrank();
+    }
+
+    function test_AllowRouter_ThenSwapSucceeds() public {
+        vm.expectEmit(true, false, false, false);
+        emit RouterAllowed(address(router2), false);
+        executor.allowRouter(address(router2), false);
+
+        uint256 amountIn = 100e18;
+        bytes memory path = abi.encodePacked(address(tokenA), uint24(3000), address(tokenB));
+        executor.allowEOA(user);
+
+        vm.startPrank(user);
+        tokenA.approve(address(executor), amountIn);
+        uint256 amountOut = executor.executeSwap(address(tokenA), address(router2), amountIn, path, 0, block.timestamp + 300);
+        vm.stopPrank();
+
+        assertEq(amountOut, amountIn);
+    }
+
+    function test_RevokeRouter_ThenSwapReverts() public {
+        vm.expectEmit(true, false, false, false);
+        emit RouterRevoked(address(router));
+        executor.revokeRouter(address(router));
+
+        uint256 amountIn = 100e18;
+        bytes memory path = abi.encodePacked(address(tokenA), uint24(3000), address(tokenB));
+        executor.allowEOA(user);
+
+        vm.startPrank(user);
+        tokenA.approve(address(executor), amountIn);
+        vm.expectRevert(abi.encodeWithSelector(RouterNotAllowed.selector, address(router)));
+        executor.executeSwap(address(tokenA), address(router), amountIn, path, 0, block.timestamp + 300);
+        vm.stopPrank();
+    }
+
+    function test_LegacyRouter_ExecutesViaFiveFieldABI() public {
+        executor.allowRouter(address(legacyRouter), true);
+        assertTrue(executor.routerIsLegacyAbi(address(legacyRouter)));
+
+        uint256 amountIn = 100e18;
+        bytes memory path = abi.encodePacked(address(tokenA), uint24(3000), address(tokenB));
+        executor.allowEOA(user);
+
+        vm.startPrank(user);
+        tokenA.approve(address(executor), amountIn);
+        uint256 amountOut = executor.executeSwap(address(tokenA), address(legacyRouter), amountIn, path, 0, block.timestamp + 300);
+        vm.stopPrank();
+
+        assertEq(amountOut, amountIn);
+        assertEq(tokenB.balanceOf(user), amountIn);
+    }
+
+    function test_LegacyRouter_CalledWithWrongAbiShape_Reverts() public {
+        executor.allowRouter(address(legacyRouter), false);
+
+        uint256 amountIn = 100e18;
+        bytes memory path = abi.encodePacked(address(tokenA), uint24(3000), address(tokenB));
+        executor.allowEOA(user);
+
+        vm.startPrank(user);
+        tokenA.approve(address(executor), amountIn);
+        vm.expectRevert(SwapFailed.selector);
+        executor.executeSwap(address(tokenA), address(legacyRouter), amountIn, path, 0, block.timestamp + 300);
+        vm.stopPrank();
+    }
+
+    function test_RevertWhen_DeadlineExceeded() public {
+        uint256 amountIn = 100e18;
+        bytes memory path = abi.encodePacked(address(tokenA), uint24(3000), address(tokenB));
+        uint256 deadline = block.timestamp - 1; // Expired
+
+        tokenA.mint(user, amountIn);
+        executor.allowEOA(user);
+
+        vm.startPrank(user);
+        tokenA.approve(address(executor), amountIn);
+        vm.expectRevert(DeadlineExceeded.selector);
+        executor.executeSwap(address(tokenA), address(router), amountIn, path, 0, deadline);
+        vm.stopPrank();
+    }
+
+    function test_Fuzz_DeadlineValidation(uint256 futureTime) public {
+        futureTime = bound(futureTime, block.timestamp + 1, block.timestamp + 10000);
+        uint256 amountIn = 100e18;
+        bytes memory path = abi.encodePacked(address(tokenA), uint24(3000), address(tokenB));
+
+        tokenA.mint(user, amountIn);
+        executor.allowEOA(user);
+
+        vm.startPrank(user);
+        tokenA.approve(address(executor), amountIn);
+        uint256 amountOut = executor.executeSwap(address(tokenA), address(router), amountIn, path, 0, futureTime);
+        vm.stopPrank();
+
+        assertEq(amountOut, amountIn);
+    }
+
+    function test_RevertWhen_InvalidPath() public {
+        executor.allowEOA(user);
+        bytes memory bad = abi.encodePacked(address(tokenA));
+        vm.prank(user);
+        vm.expectRevert(InvalidPath.selector);
+        executor.executeSwap(address(tokenA), address(router), 1e18, bad, 0, block.timestamp + 60);
+    }
+
+    function test_RevertWhen_CallbackDisabled() public {
+        executor.allowEOA(user);
+        bytes memory path = abi.encodePacked(address(tokenA), uint24(3000), address(tokenB));
+        bytes memory cb = hex"deadbeef";
+        vm.prank(user);
+        tokenA.approve(address(executor), 1e18);
+        vm.prank(user);
+        vm.expectRevert(CallbackDisabled.selector);
+        executor.executeSwapWithCallback(address(tokenA), address(router), 1e18, path, 0, block.timestamp + 60, cb);
+    }
+
+    function test_ReceiveETH() public {
+        uint256 amount = 1 ether;
+        (bool success,) = payable(address(executor)).call{value: amount}("");
+        require(success);
+        assertEq(address(executor).balance, amount);
+    }
+}
+```
+
+- [ ] **Step 3: Update `contracts/test/SecurityAudit.t.sol`'s `DelegatedExecutor` construction**
+
+Replace (in `setUp()`):
+
+```solidity
+        address[] memory routers2 = new address[](1);
+        routers2[0] = address(this);
+        executor = new DelegatedExecutor(routers2, 0);
+```
+
+with:
+
+```solidity
+        DelegatedExecutor.RouterConfig[] memory routers2 = new DelegatedExecutor.RouterConfig[](1);
+        routers2[0] = DelegatedExecutor.RouterConfig({router: address(this), legacyAbi: false});
+        executor = new DelegatedExecutor(routers2, 0);
+```
+
+The file's existing calls to `executor.executeSwap(...)`, `executor.executeSwapWithCallback(...)`, `executor.executeBatchSwaps(...)` already pass a `router` argument (added in Task 3) and need no further change — only the constructor call shape changed in this task.
+
+- [ ] **Step 4: Run the DelegatedExecutor and SecurityAudit test suites**
+
+Run: `cd contracts && forge test --match-contract "DelegatedExecutorTest|AuditTest" -vv`
+Expected: all tests PASS, including the two new `test_LegacyRouter_*` cases.
+
+- [ ] **Step 5: Run the full suite and confirm project-wide compile**
+
+Run: `cd contracts && forge build && forge test`
+Expected: builds cleanly, all tests pass. This is the first point where both dual-ABI contracts and their full dependent test suite are done — everything should be green.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add contracts/src/DelegatedExecutor.sol contracts/test/DelegatedExecutor.t.sol contracts/test/SecurityAudit.t.sol
+git commit -m "fix: dual-ABI router dispatch on DelegatedExecutor (SushiSwap V3 fix)"
+```
+
+---
+
+### Task 13: DeployRegistry.sol + deploy scripts — RouterConfig / ABI-variant wiring
+
+**Files:**
+- Modify: `contracts/src/DeployRegistry.sol`
+- Modify: `contracts/script/Deploy.s.sol`
+- Modify: `contracts/script/Configure.s.sol`
+- Modify: `contracts/script/Verify.s.sol`
+
+**Interfaces:**
+- Consumes: `SniperSearcher.RouterConfig`/`DelegatedExecutor.RouterConfig` and their new constructors from Tasks 11-12; `routerIsLegacyAbi(address) view returns (bool)` from both.
+- Produces: `DeployRegistry.sniperInitialRouters() returns (address[] memory routers, bool[] memory legacyAbiFlags)` (return shape changed — was a single `address[]`), `sniperConstructorArgs()`/`delegatedConstructorArgs()` now return 3 values each (`routers, legacyAbiFlags, minBits`), `RouterEntry` struct + `sniperInitialRouterEntries()` for ABI-encoding purposes.
+
+- [ ] **Step 1: Replace `contracts/src/DeployRegistry.sol` with the full updated library**
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.36;
+
+/// @title DeployRegistry
+/// @notice Canonical constructor arguments and Arbitrum One production addresses.
+/// @dev Source of truth for deploy scripts, Verify/Configure, and off-chain config.
+///      Constructor args are immutable once deployed; post-deploy wiring is Configure.s.sol.
+library DeployRegistry {
+    /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
+    /*                    CONSTRUCTOR ARGUMENTS                   */
+    /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
+
+    /// @dev Uniswap V3 SwapRouter02 (Arbitrum One + Sepolia). SwapRouter02-style ABI
+    ///      (4-field ExactInputParams, no deadline) — legacyAbi = false.
+    address internal constant SWAP_ROUTER = 0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45;
+
+    /// @dev SushiSwap V3 SwapRouter (Arbitrum One). Verified on-chain 2026-07-23: its own
+    ///      factory() call returns SWAP_ROUTER_SUSHISWAP_FACTORY; address matches
+    ///      sushiswap/v3-periphery's checked-in deployments/arbitrum/SwapRouter.json.
+    ///      Confirmed via mainnet-fork dry run 2026-07-24 to use the OLDER ISwapRouter ABI
+    ///      (5-field ExactInputParams, deadline inside the struct) — legacyAbi = true. See
+    ///      the design spec's "Dual-ABI router support" section for the on-chain proof.
+    address internal constant SWAP_ROUTER_SUSHISWAP = 0x8A21F6768C1f8075791D08546Dadf6daA0bE820c;
+
+    /// @dev SushiSwap V3 Factory (Arbitrum One).
+    address internal constant SWAP_ROUTER_SUSHISWAP_FACTORY = 0x1af415a1EbA07a4986a52B6f2e7dE7003D82231e;
+
+    /// @dev PancakeSwap V3 SmartRouter (Arbitrum One). Source:
+    ///      developer.pancakeswap.finance/contracts/v3/addresses. Verified on-chain 2026-07-23
+    ///      by probing exactInput(...) directly (reverted with Uniswap periphery's own "STF"
+    ///      transfer-failure string) and by its factory() matching PANCAKE_V3_FACTORY.
+    ///      SwapRouter02-style ABI — legacyAbi = false.
+    address internal constant SWAP_ROUTER_PANCAKESWAP = 0x32226588378236Fd0c7c4053999F88aC0e5cAc77;
+
+    /// @dev PancakeSwap V3 Factory (Arbitrum One).
+    address internal constant PANCAKE_V3_FACTORY = 0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865;
+
+    /// @dev Aave V3 Pool — Arbitrum One.
+    address internal constant AAVE_POOL_ARBITRUM = 0x794a61358D6845594F94dc1DB02A252b5b4814aD;
+
+    /// @dev Aave V3 Pool — Arbitrum Sepolia.
+    address internal constant AAVE_POOL_SEPOLIA = 0xB9C5a95a8f8D7ad8E64d64eF53e6aBaA40a5bF18;
+
+    /// @dev Dust bit-length floor. 0 = disabled (required for 6-dec stables).
+    uint256 internal constant MIN_AMOUNT_BIT_LENGTH = 0;
+
+    /// @dev Vectorized BEBE CREATE2 (no constructor args).
+    address internal constant BEBE = 0x00000000BEBEDB7C30ee418158e26E31a5A8f3E2;
+
+    /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
+    /*              ARBITRUM ONE PRODUCTION (2026-07-23)          */
+    /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
+
+    uint256 internal constant CHAIN_ID_ARBITRUM = 42161;
+    uint256 internal constant CHAIN_ID_ARBITRUM_SEPOLIA = 421614;
+
+    address internal constant OWNER = 0x00000001386687D89e6A36aE01C5e5F75acF61Af;
+    /// @dev Production bot EOA (same as OWNER at current deploy).
+    address internal constant EOA = 0x00000001386687D89e6A36aE01C5e5F75acF61Af;
+    address internal constant SNIPER_SEARCHER = 0xAC7465949D3178C9F13d629c6417b2a02D50DdC8;
+    address internal constant FLASH_LOAN_RECEIVER = 0xdce71b4f28dcc5686B3B4e8790bD6051345A89b8;
+    address internal constant DELEGATED_EXECUTOR = 0xc7a5B0873CB174A78017A66b541B24be64fBAde4;
+
+    /// @dev Mirrors SniperSearcher.RouterConfig / DelegatedExecutor.RouterConfig's shape for
+    ///      ABI-encoding purposes only. This library deliberately does not import either
+    ///      contract (keeps it a dependency-light constants library) — field order and types
+    ///      must stay in sync with both contracts' own RouterConfig struct.
+    struct RouterEntry {
+        address router;
+        bool legacyAbi;
+    }
+
+    /// @dev Preferred EIP-7702 multi-target designator: 0xef0100 || BEBE
+    function eoaDelegationBebeDesignator() internal pure returns (bytes memory) {
+        return abi.encodePacked(hex"ef0100", BEBE);
+    }
+
+    /// @dev Uni-only designator: 0xef0100 || DelegatedExecutor
+    function eoaDelegationDelegatedDesignator() internal pure returns (bytes memory) {
+        return abi.encodePacked(hex"ef0100", DELEGATED_EXECUTOR);
+    }
+
+    /// @dev Verified execution-venue routers: Uniswap V3, SushiSwap V3, PancakeSwap V3, paired
+    ///      with each one's ABI variant (see SWAP_ROUTER_SUSHISWAP's doc comment for why
+    ///      SushiSwap needs legacyAbi = true). Ramses and Camelot V3 are explicitly excluded —
+    ///      see the design spec's "Address verification" / "Deferred" sections for why. Shared
+    ///      by both SniperSearcher and DelegatedExecutor's constructors. Returns parallel
+    ///      arrays (not a struct array) so this library stays independent of the
+    ///      SniperSearcher/DelegatedExecutor contract types — Deploy.s.sol (which imports both)
+    ///      zips these into each contract's own RouterConfig[] type.
+    function sniperInitialRouters()
+        internal
+        pure
+        returns (address[] memory routers, bool[] memory legacyAbiFlags)
+    {
+        routers = new address[](3);
+        legacyAbiFlags = new bool[](3);
+        routers[0] = SWAP_ROUTER; // Uniswap V3
+        legacyAbiFlags[0] = false;
+        routers[1] = SWAP_ROUTER_SUSHISWAP;
+        legacyAbiFlags[1] = true;
+        routers[2] = SWAP_ROUTER_PANCAKESWAP;
+        legacyAbiFlags[2] = false;
+    }
+
+    /// @dev Same data as sniperInitialRouters(), zipped into RouterEntry[] for ABI encoding.
+    function sniperInitialRouterEntries() internal pure returns (RouterEntry[] memory entries) {
+        (address[] memory routers, bool[] memory legacyAbiFlags) = sniperInitialRouters();
+        entries = new RouterEntry[](routers.length);
+        for (uint256 i = 0; i < routers.length; ++i) {
+            entries[i] = RouterEntry({router: routers[i], legacyAbi: legacyAbiFlags[i]});
+        }
+    }
+
+    /// @dev SniperSearcher(initialRouters, minAmountBitLength) constructor args.
+    function sniperConstructorArgs()
+        internal
+        pure
+        returns (address[] memory routers, bool[] memory legacyAbiFlags, uint256 minBits)
+    {
+        (routers, legacyAbiFlags) = sniperInitialRouters();
+        minBits = MIN_AMOUNT_BIT_LENGTH;
+    }
+
+    /// @dev FlashLoanReceiver(swapExecutor, lendingPool) on Arbitrum One.
+    function flashConstructorArgsArbitrum()
+        internal
+        pure
+        returns (address swapExecutor, address lendingPool)
+    {
+        return (SNIPER_SEARCHER, AAVE_POOL_ARBITRUM);
+    }
+
+    /// @dev DelegatedExecutor(initialRouters, minAmountBitLength) constructor args.
+    function delegatedConstructorArgs()
+        internal
+        pure
+        returns (address[] memory routers, bool[] memory legacyAbiFlags, uint256 minBits)
+    {
+        (routers, legacyAbiFlags) = sniperInitialRouters();
+        minBits = MIN_AMOUNT_BIT_LENGTH;
+    }
+
+    /// @dev ABI-encoded constructor args for forge verify / explorers.
+    function sniperConstructorArgsEncoded() internal pure returns (bytes memory) {
+        return abi.encode(sniperInitialRouterEntries(), MIN_AMOUNT_BIT_LENGTH);
+    }
+
+    function flashConstructorArgsEncodedArbitrum() internal pure returns (bytes memory) {
+        return abi.encode(SNIPER_SEARCHER, AAVE_POOL_ARBITRUM);
+    }
+
+    function delegatedConstructorArgsEncoded() internal pure returns (bytes memory) {
+        return abi.encode(sniperInitialRouterEntries(), MIN_AMOUNT_BIT_LENGTH);
+    }
+
+    function aavePoolForChain(uint256 chainId) internal pure returns (address) {
+        if (chainId == CHAIN_ID_ARBITRUM) return AAVE_POOL_ARBITRUM;
+        if (chainId == CHAIN_ID_ARBITRUM_SEPOLIA) return AAVE_POOL_SEPOLIA;
+        revert("DeployRegistry: unsupported chain");
+    }
+}
+```
+
+- [ ] **Step 2: Replace `contracts/script/Deploy.s.sol` with the full updated script**
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.36;
+
+import {Script, console} from "forge-std/Script.sol";
+import {SniperSearcher} from "../src/SniperSearcher.sol";
+import {FlashLoanReceiver} from "../src/FlashLoanReceiver.sol";
+import {DelegatedExecutor} from "../src/DelegatedExecutor.sol";
+import {BasicEOABatchExecutor} from "../src/BasicEOABatchExecutor.sol";
+import {DeployRegistry} from "../src/DeployRegistry.sol";
+
+/**
+ * @title Deploy
+ * @notice Complete deployment script for Arbitrum Sniper Bot contracts
+ * @dev Constructor args from DeployRegistry. Deploys SniperSearcher, FlashLoanReceiver,
+ *      DelegatedExecutor; prefers canonical BEBE.
+ *
+ * Usage:
+ *   forge script script/Deploy.s.sol --rpc-url $RPC
+ *   forge script script/Deploy.s.sol --rpc-url $RPC --broadcast --verify
+ */
+contract Deploy is Script {
+    struct DeploymentAddresses {
+        address sniperSearcher;
+        address flashLoanReceiver;
+        address delegatedExecutor;
+        address basicEoaBatchExecutor;
+        address aavePool;
+    }
+
+    function run() external {
+        uint256 deployerKey = vm.envUint("PRIVATE_KEY");
+        address deployer = vm.addr(deployerKey);
+
+        // Verify environment
+        require(deployerKey != 0, "PRIVATE_KEY not set");
+        require(deployer != address(0), "Invalid deployer address");
+
+        (address[] memory routerAddrs, bool[] memory routerLegacyFlags, uint256 minAmountBitLength) =
+            DeployRegistry.sniperConstructorArgs();
+        SniperSearcher.RouterConfig[] memory routerConfigs =
+            new SniperSearcher.RouterConfig[](routerAddrs.length);
+        for (uint256 i = 0; i < routerAddrs.length; ++i) {
+            routerConfigs[i] =
+                SniperSearcher.RouterConfig({router: routerAddrs[i], legacyAbi: routerLegacyFlags[i]});
+        }
+        address aavePool = DeployRegistry.aavePoolForChain(block.chainid);
+        address canonicalBebe = DeployRegistry.BEBE;
+
+        console.log("");
+        console.log("========== ARBITRUM SNIPER BOT - DEPLOYMENT SCRIPT ==========");
+        console.log("");
+        console.log("Network Configuration:");
+        console.log("  Chain ID:", block.chainid);
+        console.log("  Deployer:", deployer);
+        for (uint256 i = 0; i < routerAddrs.length; ++i) {
+            console.log("  Router[%s]:", i, routerAddrs[i]);
+            console.log("    legacyAbi:", routerLegacyFlags[i]);
+        }
+        console.log("  Aave Pool:", aavePool);
+        console.log("  minAmountBitLength:", minAmountBitLength);
+        console.log("  Canonical BEBE:", canonicalBebe);
+        console.log("");
+
+        // Start deployment
+        console.log("Deploying contracts...");
+        console.log("");
+
+        vm.startBroadcast(deployerKey);
+
+        // 1. Deploy SniperSearcher(routerConfigs[], minAmountBitLength)
+        console.log("[1] Deploying SniperSearcher...");
+        console.logBytes(DeployRegistry.sniperConstructorArgsEncoded());
+        SniperSearcher sniperSearcher = new SniperSearcher(routerConfigs, minAmountBitLength);
+        console.log("    [OK] SniperSearcher deployed to:", address(sniperSearcher));
+
+        // 2. Deploy DelegatedExecutor(routerConfigs[], minAmountBitLength)
+        console.log("[2] Deploying DelegatedExecutor...");
+        console.logBytes(DeployRegistry.delegatedConstructorArgsEncoded());
+        (
+            address[] memory delegatedRouterAddrs,
+            bool[] memory delegatedRouterLegacyFlags,
+            uint256 delegatedMinBits
+        ) = DeployRegistry.delegatedConstructorArgs();
+        DelegatedExecutor.RouterConfig[] memory delegatedRouterConfigs =
+            new DelegatedExecutor.RouterConfig[](delegatedRouterAddrs.length);
+        for (uint256 i = 0; i < delegatedRouterAddrs.length; ++i) {
+            delegatedRouterConfigs[i] = DelegatedExecutor.RouterConfig({
+                router: delegatedRouterAddrs[i],
+                legacyAbi: delegatedRouterLegacyFlags[i]
+            });
+        }
+        DelegatedExecutor delegatedExecutor = new DelegatedExecutor(delegatedRouterConfigs, delegatedMinBits);
+        console.log("    [OK] DelegatedExecutor deployed to:", address(delegatedExecutor));
+
+        // 3. Deploy FlashLoanReceiver(sniper, aavePool)
+        console.log("[3] Deploying FlashLoanReceiver...");
+        FlashLoanReceiver flashLoanReceiver = new FlashLoanReceiver(address(sniperSearcher), aavePool);
+        console.log("    [OK] FlashLoanReceiver deployed to:", address(flashLoanReceiver));
+
+        // 4. Prefer Vectorized canonical BEBE when present; only deploy a local copy
+        //    if the CREATE2 address has no code on this chain.
+        address basicEoaBatchExecutor = canonicalBebe;
+        if (canonicalBebe.code.length == 0) {
+            console.log("[4] Canonical BEBE missing - deploying local BasicEOABatchExecutor...");
+            basicEoaBatchExecutor = address(new BasicEOABatchExecutor());
+            console.log("    [OK] BasicEOABatchExecutor deployed to:", basicEoaBatchExecutor);
+        } else {
+            console.log("[4] Using canonical BEBE (skip deploy):", canonicalBebe);
+        }
+
+        // 5. Whitelist FlashLoanReceiver on SniperSearcher so executeOperation can call
+        //    executeSwap (onlyOwnerOrAllowedExecutor). Without this, flash callbacks revert
+        //    Unauthorized even with correct ERC20 approvals.
+        console.log("[5] Allowing FlashLoanReceiver as SniperSearcher executor...");
+        sniperSearcher.allowExecutor(address(flashLoanReceiver));
+        console.log("    [OK] allowedExecutors[FlashLoanReceiver] = true");
+
+        vm.stopBroadcast();
+
+        // Print summary
+        console.log("");
+        console.log("================== DEPLOYMENT SUMMARY ==================");
+        console.log("");
+        console.log("[OK] All contracts deployed successfully!");
+        console.log("");
+        console.log("Contract Addresses:");
+        console.log("  SniperSearcher:         ", address(sniperSearcher));
+        console.log("  FlashLoanReceiver:      ", address(flashLoanReceiver));
+        console.log("  DelegatedExecutor:      ", address(delegatedExecutor));
+        console.log("  BasicEOABatchExecutor:  ", basicEoaBatchExecutor);
+        console.log("");
+        console.log("Configuration:");
+        for (uint256 i = 0; i < routerAddrs.length; ++i) {
+            console.log("  Router[%s]:             ", i, routerAddrs[i]);
+            console.log("    legacyAbi:            ", routerLegacyFlags[i]);
+        }
+        console.log("  AavePool:               ", aavePool);
+        console.log("  minAmountBitLength:     ", minAmountBitLength);
+        console.log("  Owner:                  ", deployer);
+        console.log("");
+        console.log("EIP-7702 roles:");
+        console.log("  DelegatedExecutor       = single-target swaps via allowlisted router");
+        console.log("  BasicEOABatchExecutor   = multi-target CALL batch (any contract)");
+        console.log("");
+        console.log("Permissions wired:");
+        console.log("  SniperSearcher.allowExecutor(FlashLoanReceiver) = true");
+        console.log("  FlashLoanReceiver approves SniperSearcher + Aave pool at runtime");
+        console.log("  SniperSearcher approves the caller-selected allowlisted router per-swap then revokes");
+        console.log("  Router ABI variant (SwapRouter02 vs legacy ISwapRouter) selected per-router on-chain");
+        console.log("");
+        console.log("Next Steps:");
+        console.log("  1. Save these addresses to your .env file");
+        console.log("  2. Update SNIPER_SEARCHER_ADDRESS=", address(sniperSearcher));
+        console.log("  3. Update FLASH_LOAN_RECEIVER_ADDRESS=", address(flashLoanReceiver));
+        console.log("  4. Update DELEGATED_EXECUTOR_ADDRESS=", address(delegatedExecutor));
+        console.log("  5. Update BATCH_EXECUTOR_ADDRESS=", basicEoaBatchExecutor);
+        console.log("  6. On already-deployed stacks: cast send $SNIPER allowExecutor(address) $FLASH");
+        console.log("  7. Run forge script script/Verify.s.sol --rpc-url arbitrum");
+        console.log("  8. Monitor initial transactions carefully");
+        console.log("");
+
+        // Store addresses for later use
+        _saveDeploymentAddresses(
+            DeploymentAddresses({
+                sniperSearcher: address(sniperSearcher),
+                flashLoanReceiver: address(flashLoanReceiver),
+                delegatedExecutor: address(delegatedExecutor),
+                basicEoaBatchExecutor: basicEoaBatchExecutor,
+                aavePool: aavePool
+            })
+        );
+    }
+
+    /**
+     * Internal: Log deployment addresses to console
+     */
+    function _saveDeploymentAddresses(DeploymentAddresses memory addresses) internal pure {
+        // Addresses are logged above; kept for future file persistence.
+        addresses;
+    }
+}
+```
+
+- [ ] **Step 3: Replace `contracts/script/Configure.s.sol` with the full updated script**
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.36;
+
+import {Script, console} from "forge-std/Script.sol";
+import {SniperSearcher} from "../src/SniperSearcher.sol";
+import {FlashLoanReceiver} from "../src/FlashLoanReceiver.sol";
+import {DelegatedExecutor} from "../src/DelegatedExecutor.sol";
+import {DeployRegistry} from "../src/DeployRegistry.sol";
+
+/**
+ * @title Configure
+ * @notice Post-deploy on-chain configuration + constructor-value audit.
+ *
+ * Ensures:
+ *   1. Live immutables match DeployRegistry constructor args
+ *   2. SniperSearcher.allowExecutor(FlashLoanReceiver)
+ *   3. DelegatedExecutor.allowEOA(owner) for non-7702 external path
+ *
+ * Usage:
+ *   forge script script/Configure.s.sol --rpc-url $RPC
+ *   forge script script/Configure.s.sol --rpc-url $RPC --broadcast
+ *
+ * Env (optional overrides; default = DeployRegistry production):
+ *   SNIPER_SEARCHER_ADDRESS, FLASH_LOAN_RECEIVER_ADDRESS, DELEGATED_EXECUTOR_ADDRESS
+ *   PRIVATE_KEY (required for --broadcast)
+ */
+contract Configure is Script {
+    function run() external {
+        address sniper = _envOr("SNIPER_SEARCHER_ADDRESS", DeployRegistry.SNIPER_SEARCHER);
+        address flash = _envOr("FLASH_LOAN_RECEIVER_ADDRESS", DeployRegistry.FLASH_LOAN_RECEIVER);
+        address delegated = _envOr("DELEGATED_EXECUTOR_ADDRESS", DeployRegistry.DELEGATED_EXECUTOR);
+
+        console.log("");
+        console.log("========== ON-CHAIN CONFIGURE + CONSTRUCTOR AUDIT ==========");
+        console.log("chainId ", block.chainid);
+        console.log("sniper  ", sniper);
+        console.log("flash   ", flash);
+        console.log("delegated", delegated);
+        console.log("");
+
+        SniperSearcher ss = SniperSearcher(payable(sniper));
+        FlashLoanReceiver fl = FlashLoanReceiver(payable(flash));
+        DelegatedExecutor de = DelegatedExecutor(payable(delegated));
+
+        // --- Constructor / immutable audit ---
+        console.log("[1] Constructor values (on-chain vs DeployRegistry)");
+        (address[] memory expectedRouters, bool[] memory expectedLegacyFlags) =
+            DeployRegistry.sniperInitialRouters();
+        for (uint256 i = 0; i < expectedRouters.length; ++i) {
+            require(ss.allowedRouters(expectedRouters[i]), "Sniper: expected router not allowlisted");
+            require(
+                ss.routerIsLegacyAbi(expectedRouters[i]) == expectedLegacyFlags[i],
+                "Sniper: router legacyAbi flag mismatch"
+            );
+        }
+        require(ss.minAmountBitLength() == DeployRegistry.MIN_AMOUNT_BIT_LENGTH, "Sniper: minBits");
+        require(ss.chainId() == block.chainid, "Sniper: chainId");
+        for (uint256 i = 0; i < expectedRouters.length; ++i) {
+            console.log("  SniperSearcher.allowedRouters[%s]  =", i, expectedRouters[i]);
+            console.log("    legacyAbi =", expectedLegacyFlags[i]);
+        }
+        console.log("  SniperSearcher.minAmountBitLength =", ss.minAmountBitLength());
+        console.log("  SniperSearcher.chainId            =", ss.chainId());
+        console.log("  SniperSearcher.owner              =", ss.owner());
+
+        require(fl.swapExecutor() == sniper, "Flash: swapExecutor != sniper");
+        require(
+            fl.lendingPool() == DeployRegistry.aavePoolForChain(block.chainid),
+            "Flash: lendingPool mismatch"
+        );
+        console.log("  FlashLoanReceiver.swapExecutor    =", fl.swapExecutor());
+        console.log("  FlashLoanReceiver.lendingPool     =", fl.lendingPool());
+        console.log("  FlashLoanReceiver.owner           =", fl.owner());
+
+        require(de.minAmountBitLength() == DeployRegistry.MIN_AMOUNT_BIT_LENGTH, "Delegated: minBits");
+        console.log("  DelegatedExecutor.minAmountBitLength =", de.minAmountBitLength());
+        console.log("  DelegatedExecutor.owner              =", de.owner());
+        console.log("  [OK] constructor immutables match registry");
+        console.log("");
+
+        // Encoded args for explorers / re-verify
+        console.log("[2] ABI-encoded constructor args (registry)");
+        console.logBytes(DeployRegistry.sniperConstructorArgsEncoded());
+        console.logBytes(DeployRegistry.flashConstructorArgsEncodedArbitrum());
+        console.logBytes(DeployRegistry.delegatedConstructorArgsEncoded());
+        console.log("");
+
+        // --- On-chain permission wiring ---
+        address owner = ss.owner();
+        require(owner == fl.owner() && owner == de.owner(), "owners diverge");
+
+        uint256 pk = vm.envOr("PRIVATE_KEY", uint256(0));
+        bool broadcast = pk != 0;
+
+        console.log("[3] Permissions");
+        bool flashAllowed = ss.allowedExecutors(flash);
+        bool ownerAllowedEoa = de.allowedEOAs(owner);
+        console.log("  allowedExecutors(Flash) =", flashAllowed);
+        console.log("  allowedEOAs(owner)      =", ownerAllowedEoa);
+
+        bool[] memory delegatedRouterMissing = new bool[](expectedRouters.length);
+        bool anyDelegatedRouterMissing = false;
+        for (uint256 i = 0; i < expectedRouters.length; ++i) {
+            bool allowed = de.allowedRouters(expectedRouters[i]);
+            bool legacyMatches = de.routerIsLegacyAbi(expectedRouters[i]) == expectedLegacyFlags[i];
+            delegatedRouterMissing[i] = !allowed || !legacyMatches;
+            if (delegatedRouterMissing[i]) anyDelegatedRouterMissing = true;
+            console.log("  DelegatedExecutor.allowedRouters[%s] =", i, allowed);
+            console.log("    legacyAbi matches expected:", legacyMatches);
+        }
+
+        if (flashAllowed && ownerAllowedEoa && !anyDelegatedRouterMissing) {
+            console.log("  [OK] no on-chain writes needed");
+        } else if (!broadcast) {
+            console.log("  [SKIP] would configure; set PRIVATE_KEY and --broadcast to apply");
+            if (!flashAllowed) {
+                console.log("    missing: SniperSearcher.allowExecutor(FlashLoanReceiver)");
+            }
+            if (!ownerAllowedEoa) {
+                console.log("    missing: DelegatedExecutor.allowEOA(owner)");
+            }
+            for (uint256 i = 0; i < expectedRouters.length; ++i) {
+                if (delegatedRouterMissing[i]) {
+                    console.log("    missing/mismatched: DelegatedExecutor.allowRouter(...)", expectedRouters[i]);
+                }
+            }
+        } else {
+            require(vm.addr(pk) == owner, "PRIVATE_KEY is not contract owner");
+            vm.startBroadcast(pk);
+            if (!flashAllowed) {
+                console.log("  -> allowExecutor(Flash)");
+                ss.allowExecutor(flash);
+            }
+            if (!ownerAllowedEoa) {
+                console.log("  -> allowEOA(owner)");
+                de.allowEOA(owner);
+            }
+            for (uint256 i = 0; i < expectedRouters.length; ++i) {
+                if (delegatedRouterMissing[i]) {
+                    console.log("  -> DelegatedExecutor.allowRouter(...)", expectedRouters[i]);
+                    de.allowRouter(expectedRouters[i], expectedLegacyFlags[i]);
+                }
+            }
+            vm.stopBroadcast();
+            console.log("  allowedExecutors(Flash) =", ss.allowedExecutors(flash));
+            console.log("  allowedEOAs(owner)      =", de.allowedEOAs(owner));
+            require(ss.allowedExecutors(flash), "allowExecutor failed");
+            require(de.allowedEOAs(owner), "allowEOA failed");
+            for (uint256 i = 0; i < expectedRouters.length; ++i) {
+                require(de.allowedRouters(expectedRouters[i]), "DelegatedExecutor allowRouter failed");
+                require(
+                    de.routerIsLegacyAbi(expectedRouters[i]) == expectedLegacyFlags[i],
+                    "DelegatedExecutor legacyAbi flag failed"
+                );
+            }
+            console.log("  [OK] permissions configured");
+        }
+
+        console.log("");
+        console.log("[PASS] Configure complete");
+        console.log("");
+    }
+
+    function _envOr(string memory key, address fallbackAddr) internal view returns (address) {
+        try vm.envAddress(key) returns (address a) {
+            if (a != address(0)) return a;
+        } catch {}
+        return fallbackAddr;
+    }
+}
+```
+
+- [ ] **Step 4: Replace `contracts/script/Verify.s.sol` with the full updated script (also closes a Minor gap Task 4's reviewer flagged: Verify.s.sol now checks DelegatedExecutor's routers too, matching Configure.s.sol)**
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.36;
+
+import {Script, console} from "forge-std/Script.sol";
+import {SniperSearcher} from "../src/SniperSearcher.sol";
+import {FlashLoanReceiver} from "../src/FlashLoanReceiver.sol";
+import {DelegatedExecutor} from "../src/DelegatedExecutor.sol";
+import {DeployRegistry} from "../src/DeployRegistry.sol";
+
+/**
+ * @title Verify
+ * @notice Post-deployment verification — hard-fails on wiring / constructor mismatches.
+ *
+ *   forge script script/Verify.s.sol --rpc-url $RPC
+ *
+ * Env optional (defaults DeployRegistry production addresses):
+ *   SNIPER_SEARCHER_ADDRESS, FLASH_LOAN_RECEIVER_ADDRESS, DELEGATED_EXECUTOR_ADDRESS, BATCH_EXECUTOR_ADDRESS
+ */
+contract Verify is Script {
+    function run() external view {
+        console.log("");
+        console.log("=============================================================");
+        console.log("         CONTRACT VERIFICATION (HARD FAIL ON MISMATCH)");
+        console.log("=============================================================");
+        console.log("");
+
+        address sniperSearcher = _envOr("SNIPER_SEARCHER_ADDRESS", DeployRegistry.SNIPER_SEARCHER);
+        address flashLoanReceiver = _envOr("FLASH_LOAN_RECEIVER_ADDRESS", DeployRegistry.FLASH_LOAN_RECEIVER);
+        address delegatedExecutor = _envOr("DELEGATED_EXECUTOR_ADDRESS", DeployRegistry.DELEGATED_EXECUTOR);
+        address batchExecutor = _envOr("BATCH_EXECUTOR_ADDRESS", DeployRegistry.BEBE);
+
+        console.log("Chain:", block.chainid);
+        require(
+            block.chainid == DeployRegistry.CHAIN_ID_ARBITRUM
+                || block.chainid == DeployRegistry.CHAIN_ID_ARBITRUM_SEPOLIA,
+            "unsupported chain"
+        );
+
+        address expectedPool = DeployRegistry.aavePoolForChain(block.chainid);
+
+        // --- SniperSearcher (constructor: RouterConfig[] initialRouters, minAmountBitLength) ---
+        require(_isContract(sniperSearcher), "SniperSearcher: no code");
+        SniperSearcher ss = SniperSearcher(payable(sniperSearcher));
+        (address[] memory expectedRouters, bool[] memory expectedLegacyFlags) =
+            DeployRegistry.sniperInitialRouters();
+        for (uint256 i = 0; i < expectedRouters.length; ++i) {
+            require(ss.allowedRouters(expectedRouters[i]), "SniperSearcher: expected router not allowlisted");
+            require(
+                ss.routerIsLegacyAbi(expectedRouters[i]) == expectedLegacyFlags[i],
+                "SniperSearcher: router legacyAbi flag mismatch"
+            );
+        }
+        require(
+            ss.minAmountBitLength() == DeployRegistry.MIN_AMOUNT_BIT_LENGTH, "SniperSearcher: minBits"
+        );
+        require(ss.chainId() == block.chainid, "SniperSearcher: chainId mismatch");
+        require(ss.allowedExecutors(flashLoanReceiver), "SniperSearcher: Flash not allowedExecutor");
+        console.log("[PASS] SniperSearcher wiring + constructor");
+        console.log("       owner=", ss.owner());
+        console.log("       minAmountBitLength=", ss.minAmountBitLength());
+        for (uint256 i = 0; i < expectedRouters.length; ++i) {
+            console.log("       allowedRouters[%s]=", i, expectedRouters[i]);
+            console.log("         legacyAbi=", expectedLegacyFlags[i]);
+        }
+
+        // --- FlashLoanReceiver (constructor: swapExecutor, lendingPool) ---
+        require(_isContract(flashLoanReceiver), "FlashLoanReceiver: no code");
+        FlashLoanReceiver flr = FlashLoanReceiver(payable(flashLoanReceiver));
+        require(flr.swapExecutor() == sniperSearcher, "Flash: swapExecutor != Sniper");
+        require(flr.lendingPool() == expectedPool, "Flash: bad lendingPool");
+        require(flr.owner() == ss.owner(), "Flash: owner != Sniper owner");
+        console.log("[PASS] FlashLoanReceiver wiring + constructor");
+        console.log("       owner=", flr.owner());
+        console.log("       swapExecutor=", flr.swapExecutor());
+        console.log("       lendingPool=", flr.lendingPool());
+
+        // --- DelegatedExecutor (constructor: RouterConfig[] initialRouters, minAmountBitLength) ---
+        require(_isContract(delegatedExecutor), "DelegatedExecutor: no code");
+        DelegatedExecutor de = DelegatedExecutor(payable(delegatedExecutor));
+        require(de.owner() == ss.owner(), "DelegatedExecutor: owner mismatch");
+        require(
+            de.minAmountBitLength() == DeployRegistry.MIN_AMOUNT_BIT_LENGTH, "Delegated: minBits"
+        );
+        for (uint256 i = 0; i < expectedRouters.length; ++i) {
+            require(de.allowedRouters(expectedRouters[i]), "DelegatedExecutor: expected router not allowlisted");
+            require(
+                de.routerIsLegacyAbi(expectedRouters[i]) == expectedLegacyFlags[i],
+                "DelegatedExecutor: router legacyAbi flag mismatch"
+            );
+        }
+        console.log("[PASS] DelegatedExecutor wiring + constructor");
+        console.log("       owner=", de.owner());
+        console.log("       minAmountBitLength=", de.minAmountBitLength());
+        for (uint256 i = 0; i < expectedRouters.length; ++i) {
+            console.log("       allowedRouters[%s]=", i, expectedRouters[i]);
+            console.log("         legacyAbi=", expectedLegacyFlags[i]);
+        }
+
+        // --- BEBE / batch executor ---
+        require(_isContract(batchExecutor), "BATCH_EXECUTOR: no code");
+        console.log("[PASS] Batch executor has code");
+        console.log("       address=", batchExecutor);
+        if (batchExecutor == DeployRegistry.BEBE) {
+            console.log("       (canonical Vectorized BEBE)");
+        }
+
+        console.log("");
+        console.log("[PASS] All production wiring checks passed");
+        console.log("");
+    }
+
+    function _envOr(string memory key, address fallbackAddr) internal view returns (address) {
+        try vm.envAddress(key) returns (address a) {
+            if (a != address(0)) return a;
+        } catch {}
+        return fallbackAddr;
+    }
+
+    function _isContract(address addr) internal view returns (bool) {
+        uint256 size;
+        assembly {
+            size := extcodesize(addr)
+        }
+        return size > 0;
+    }
+}
+```
+
+- [ ] **Step 5: Compile and run the full suite**
+
+Run: `cd contracts && forge build && forge test`
+Expected: builds cleanly, all tests pass (unchanged count from Task 12 — these are script-only changes, no new test files here).
+
+Run: `grep -rn "sniperInitialRouters()\s*;" contracts/script contracts/test 2>/dev/null`
+Expected: no output — every call site now destructures both return values (`(address[] memory ..., bool[] memory ...) = DeployRegistry.sniperInitialRouters();`), not the old single-value form.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add contracts/src/DeployRegistry.sol contracts/script/Deploy.s.sol contracts/script/Configure.s.sol contracts/script/Verify.s.sol
+git commit -m "fix: RouterConfig / ABI-variant wiring in DeployRegistry and deploy scripts"
+```
+
+---
+
+### Task 14: Regenerate `src/contractABIs.ts` (round 2)
+
+**Files:**
+- Modify: `src/contractABIs.ts` (generated — do not hand-edit)
+
+**Interfaces:**
+- Consumes: the freshly-compiled `SniperSearcher`/`DelegatedExecutor` artifacts from Tasks 11-12 (new `RouterConfig` constructor shape, new `allowRouter(address,bool)` signature, new `routerIsLegacyAbi` getter).
+- Produces: updated `SNIPER_SEARCHER_ABI`/`DELEGATED_EXECUTOR_ABI` reflecting the dual-ABI router support. `FLASH_LOAN_RECEIVER_ABI` is unaffected (Task 2's interface didn't change here) but gets regenerated too since the script regenerates all three together.
+
+- [ ] **Step 1: Run the existing regen script**
+
+Run: `node scripts/regen-abis-and-prod-fixes.mjs`
+Expected: prints `wrote contractABIs.ts <byte count>`.
+
+- [ ] **Step 2: Confirm the new ABI reflects the RouterConfig constructor**
+
+Run: `grep -n "legacyAbi" src/contractABIs.ts | head -5`
+Expected: at least one match (the regenerated constructor/`allowRouter` ABI entries now reference a `legacyAbi` field/param).
+
+- [ ] **Step 3: Type-check the project**
+
+Run: `npx tsc --noEmit`
+Expected: no errors. No off-chain TypeScript file references the contract constructor shape directly (only via opaque `ethers.Contract` calls passing `router` through, unaffected by this ABI regen) — the `router`-parameterized swap functions this regen affects are unchanged from round 1 in Tasks 1-3/6-9, so this should be a no-op for every off-chain call site.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add src/contractABIs.ts
+git commit -m "chore: regenerate contractABIs.ts for dual-ABI router support"
+```
+
+---
+
+### Task 15: Fork dry-run redo — prove SushiSwap V3 swap succeeds through SniperSearcher
+
+**Files:**
+- None modified — this task only runs verification commands.
+
+**Interfaces:**
+- Consumes: everything from Tasks 1-14, specifically the Task 11 fix that should make this task's core proof succeed where Task 10 found it failing.
+
+- [ ] **Step 1: Start a local Anvil fork of Arbitrum One**
+
+Run: `anvil --fork-url https://arb1.arbitrum.io/rpc --chain-id 42161 &`
+Expected: Anvil prints funded local accounts and `Listening on 127.0.0.1:8545`. Keep running for the rest of this task.
+
+- [ ] **Step 2: Deploy the updated contracts to the fork**
+
+Run:
+```bash
+cd contracts
+PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 \
+  forge script script/Deploy.s.sol --rpc-url http://127.0.0.1:8545 --broadcast
+```
+Expected: prints `[OK] SniperSearcher deployed to: 0x...` etc., and each `Router[i]` log line now also prints a `legacyAbi:` line (`false, true, false` for Uniswap/Sushi/Pancake in that order). Note the 3 deployed addresses.
+
+- [ ] **Step 3: Run `Configure.s.sol` and `Verify.s.sol` against the fork**
+
+Run (substituting the addresses from Step 2):
+```bash
+SNIPER_SEARCHER_ADDRESS=<address> \
+FLASH_LOAN_RECEIVER_ADDRESS=<address> \
+DELEGATED_EXECUTOR_ADDRESS=<address> \
+PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 \
+  forge script script/Configure.s.sol --rpc-url http://127.0.0.1:8545 --broadcast
+```
+Expected: `[OK]` on both permissions and constructor sections, including the new `legacyAbi matches expected: true` lines for every router.
+
+Run: `SNIPER_SEARCHER_ADDRESS=<address> FLASH_LOAN_RECEIVER_ADDRESS=<address> DELEGATED_EXECUTOR_ADDRESS=<address> forge script script/Verify.s.sol --rpc-url http://127.0.0.1:8545`
+Expected: `[PASS] All production wiring checks passed`, including the DelegatedExecutor router checks Task 13 added.
+
+- [ ] **Step 4: Prove a SushiSwap V3 swap now succeeds THROUGH SniperSearcher (not just the raw router)**
+
+Confirm a real SushiSwap V3 WETH/USDC pool exists on the fork (same check as Task 10 — try fee tiers 500, then 100, then 3000):
+```bash
+cast call 0x1af415a1EbA07a4986a52B6f2e7dE7003D82231e \
+  "getPool(address,address,uint24)(address)" \
+  0x82aF49447D8a07e3bd95BD0d56f35241523fBab1 0xaf88d065e77c8cC2239327C5EDb3A432268e5831 500 \
+  --rpc-url http://127.0.0.1:8545
+```
+
+Fund the deployer with WETH and approve SniperSearcher (use the deployer address printed by Anvil for account #0, and the SniperSearcher address from Step 2):
+```bash
+cast send 0x82aF49447D8a07e3bd95BD0d56f35241523fBab1 "deposit()" \
+  --value 5ether --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 \
+  --rpc-url http://127.0.0.1:8545
+
+cast send 0x82aF49447D8a07e3bd95BD0d56f35241523fBab1 "approve(address,uint256)" \
+  <SniperSearcher address> 1000000000000000000 \
+  --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 \
+  --rpc-url http://127.0.0.1:8545
+```
+
+Build the WETH->USDC path at the fee tier confirmed above (note: do NOT set a shell variable named `PATH` — it clobbers the executable search path and breaks every subsequent command; use a differently-named variable):
+```bash
+SWAPPATH=$(cast concat-hex 0x82aF49447D8a07e3bd95BD0d56f35241523fBab1 0x0001f4 0xaf88d065e77c8cC2239327C5EDb3A432268e5831)
+```
+
+Call `executeSwap` through **SniperSearcher**, with `router` = SushiSwap V3's address — this is the call that failed with `SwapFailed` in Task 10 and must now succeed:
+```bash
+cast send <SniperSearcher address> \
+  "executeSwap(address,address,uint256,bytes,uint256)" \
+  0x82aF49447D8a07e3bd95BD0d56f35241523fBab1 \
+  0x8A21F6768C1f8075791D08546Dadf6daA0bE820c \
+  1000000000000000000 \
+  "$SWAPPATH" \
+  0 \
+  --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 \
+  --rpc-url http://127.0.0.1:8545
+```
+
+Expected: `status: 1 (success)`, with a `Swap` event in the logs from the SniperSearcher address. If this still fails, that is a BLOCKED status — do not mark this task or the plan complete; the dual-ABI fix did not work as intended and needs further diagnosis (re-check `routerIsLegacyAbi(sushiRouter)` returns `true` via `cast call`, and re-check the deployed bytecode actually matches Task 11's `_executeSwap` branch).
+
+- [ ] **Step 5: Tear down**
+
+Run: `pkill -f "anvil --fork-url"` (or find and kill the specific PID)
+Expected: fork process stops, port 8545 free. Confirm with `lsof -i :8545` (expect no output) before considering this step done.
+
+- [ ] **Step 6: Report results, no commit**
+
+This task produces no code changes. Summarize: pool found (address + fee tier), WETH funded/approved, the swap transaction hash, confirmation of `status: 1` and a `Swap` event, and Anvil torn down cleanly. This is the plan's final gate — only after this succeeds is the multi-venue swap execution feature actually proven to work end-to-end for all 3 venues, not just compile.
