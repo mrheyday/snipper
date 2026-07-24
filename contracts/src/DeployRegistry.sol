@@ -57,9 +57,9 @@ library DeployRegistry {
     address internal constant OWNER = 0x00000001386687D89e6A36aE01C5e5F75acF61Af;
     /// @dev Production bot EOA (same as OWNER at current deploy).
     address internal constant EOA = 0x00000001386687D89e6A36aE01C5e5F75acF61Af;
-    address internal constant SNIPER_SEARCHER = 0xAC7465949D3178C9F13d629c6417b2a02D50DdC8;
-    address internal constant FLASH_LOAN_RECEIVER = 0xdce71b4f28dcc5686B3B4e8790bD6051345A89b8;
-    address internal constant DELEGATED_EXECUTOR = 0xc7a5B0873CB174A78017A66b541B24be64fBAde4;
+    address internal constant SNIPER_SEARCHER = 0xBa0FAb34298983BC114Afa52685521571C1d84F9;
+    address internal constant FLASH_LOAN_RECEIVER = 0x37895b70656E70F8CF252C97BdB3Aee95D175bEF;
+    address internal constant DELEGATED_EXECUTOR = 0x91d9891F34FEE2Bf55ED3129C19bc4FbD5cE4C57;
 
     /// @dev Mirrors SniperSearcher.RouterConfig / DelegatedExecutor.RouterConfig's shape for
     ///      ABI-encoding purposes only. This library deliberately does not import either
