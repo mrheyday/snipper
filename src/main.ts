@@ -14,7 +14,7 @@ import {
 } from './config';
 import { Contract } from 'ethers';
 import { Logger } from './logger';
-import { validateAndChecksumAddress, validateFeeTier } from './validation';
+import { validateAndChecksumAddress, validateFeeTier, getOptionalEnv } from './validation';
 import { bitquery } from './bitquery';
 import {
   assertRouterAllowed,
@@ -193,9 +193,13 @@ class SniperBot {
     const walletBalance = await provider.getBalance(walletAddress);
     logger.info(`  Wallet ETH: ${ethers.formatEther(walletBalance)}`);
 
-    // Subscribe to live DEX trades for this target while executing
+    // Subscribe to live DEX trades for this target while executing.
+    // OFF by default: the Bitquery streaming subscription burns the plan's time_sec limit
+    // (which is exhausted first on the Trial plan — points/HTTP discovery is unaffected) and is
+    // observational only. Opt in with ENABLE_DEX_TRADE_STREAM=true once on a plan with headroom.
     let tradeWatch: { unsubscribe: () => void } | undefined;
-    if (bitquery.configured) {
+    const dexStreamEnabled = getOptionalEnv('ENABLE_DEX_TRADE_STREAM', 'false') === 'true';
+    if (dexStreamEnabled && bitquery.configured && !bitquery.quotaBlocked) {
       tradeWatch = bitquery.subscribeDexTrades(
         (t) => {
           logger.info(

@@ -137,8 +137,36 @@ export class BitqueryClient {
     return Boolean(this.auth);
   }
 
+  /** Circuit breaker: when the plan's usage quota is hit, pause ALL Bitquery calls for a
+   *  cooldown instead of hammering the endpoint (and spamming the log) every loop iteration.
+   *  The bot degrades to static/curated candidates + on-chain quoting while paused. */
+  private quotaBlockedUntil = 0;
+  private static readonly QUOTA_COOLDOWN_MS = 10 * 60 * 1000; // 10 min
+
+  private static isQuotaError(msg: string): boolean {
+    return /quota|time limit|access restricted|payment required/i.test(msg);
+  }
+
+  /** True while the quota cooldown is active. */
+  get quotaBlocked(): boolean {
+    return Date.now() < this.quotaBlockedUntil;
+  }
+
+  private tripQuota(context: string, msg: string): void {
+    const wasBlocked = this.quotaBlocked;
+    this.quotaBlockedUntil = Date.now() + BitqueryClient.QUOTA_COOLDOWN_MS;
+    if (!wasBlocked) {
+      logger.warn(
+        `Bitquery quota reached (${context}) — pausing all Bitquery calls for ` +
+          `${BitqueryClient.QUOTA_COOLDOWN_MS / 60_000}min; bot continues on static/curated ` +
+          `candidates with on-chain quoting. (${msg})`
+      );
+    }
+  }
+
   async query<T = unknown>(query: string, variables: Record<string, unknown> = {}): Promise<T> {
     if (!this.auth) throw new Error('BITQUERY_TOKEN not configured');
+    if (this.quotaBlocked) throw new Error('Bitquery quota cooldown active');
     const cfg: AxiosRequestConfig = {
       method: 'post',
       url: this.httpUrl,
@@ -161,7 +189,9 @@ export class BitqueryClient {
       }
     );
     if (res.data?.errors?.length) {
-      throw new Error(`Bitquery GraphQL: ${JSON.stringify(res.data.errors)}`);
+      const errStr = JSON.stringify(res.data.errors);
+      if (BitqueryClient.isQuotaError(errStr)) this.tripQuota('query', errStr);
+      throw new Error(`Bitquery GraphQL: ${errStr}`);
     }
     return res.data?.data as T;
   }
@@ -187,6 +217,27 @@ export class BitqueryClient {
       onError?.(err);
       return { unsubscribe: () => undefined };
     }
+
+    if (this.quotaBlocked) {
+      onError?.(new Error('Bitquery quota cooldown active'));
+      return { unsubscribe: () => undefined };
+    }
+
+    // Route stream errors through here so a quota message trips the breaker and stops the
+    // reconnect loop (otherwise onclose would keep re-dialing an endpoint that only 402s).
+    const handleErr = (e: Error) => {
+      if (BitqueryClient.isQuotaError(e.message)) {
+        this.tripQuota('stream', e.message);
+        active = false;
+        if (reconnectTimer) clearTimeout(reconnectTimer);
+        try {
+          ws?.close();
+        } catch {
+          /* ignore */
+        }
+      }
+      onError?.(e);
+    };
 
     const WebSocketClient = globalThis.WebSocket;
     if (!WebSocketClient) {
@@ -233,12 +284,12 @@ export class BitqueryClient {
           case 'data':
           case 'next':
             if (msg.payload?.errors) {
-              onError?.(new Error(JSON.stringify(msg.payload.errors)));
+              handleErr(new Error(JSON.stringify(msg.payload.errors)));
             }
             if (msg.payload?.data !== undefined) onData(msg.payload.data);
             break;
           case 'error':
-            onError?.(new Error(JSON.stringify(msg.payload ?? msg)));
+            handleErr(new Error(JSON.stringify(msg.payload ?? msg)));
             break;
           case 'complete':
             logger.info('Bitquery subscription complete');
