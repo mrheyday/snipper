@@ -13,6 +13,10 @@ export interface DEXProtocolConfig {
   dexType: DEXType;
   routerAddress: string;
   quoterAddress: string;
+  /** Uniswap-V3-style factory, used to resolve a pair's pool address for the
+   *  Bitquery cross-check (see flashSizer.ts). Not needed for quoting itself —
+   *  the Quoter contracts resolve pools internally via their own factory. */
+  factoryAddress: string;
   supportedFeeTiers: number[];
 }
 
@@ -26,48 +30,69 @@ export interface BestRouteResult {
   executionPrice: bigint;
 }
 
+// Camelot V3 (Algebra engine — dynamic fees, no fee bytes in its path encoding, different
+// exactInputSingle call shape) and Ramses (Solidly-family AMM — stable/volatile pool flag,
+// different router call shape) are NOT Uniswap-V3-style forks and are deliberately excluded
+// from this list, not just from EXECUTION_VENUE_PROTOCOLS: their previous entries pointed at
+// addresses with no deployed contract on Arbitrum One, and even correct addresses for them
+// would need dedicated adapters, not the exactInput(ExactInputParams) call this file assumes.
+// See docs/superpowers/specs/2026-07-23-multi-venue-swap-execution-design.md, "Address
+// verification" / "Deferred", for the full verification trail and follow-up scope.
 export const ARBITRUM_DEX_PROTOCOLS: DEXProtocolConfig[] = [
   {
     name: 'Uniswap V3',
     dexType: DEXType.UNISWAP_V3,
     routerAddress: '0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45',
     quoterAddress: QUOTER_ADDRESS || '0x61fFE014bA17989E743c5F6cB21bF9697530B21e',
+    factoryAddress: '0x1F98431c8aD98523631AE4a59f267346ea31F984',
     supportedFeeTiers: [100, 500, 3000, 10000],
-  },
-  {
-    name: 'Camelot V3',
-    dexType: DEXType.UNISWAP_V3,
-    routerAddress: '0x1f721E29952737f584742468A36dB1B0A6FAaA4e',
-    quoterAddress: '0x05b2210874e4c27892b157a92ddf3e5caecbca7a',
-    supportedFeeTiers: [100, 500, 3000],
-  },
-  {
-    name: 'Ramses V2',
-    dexType: DEXType.UNISWAP_V3,
-    routerAddress: '0xAAA8888997e59099A6d43576d313d1000ee72023',
-    quoterAddress: '0xAAACa9dFf3F66b1070A647242880b91e9f13e73A',
-    supportedFeeTiers: [100, 500, 3000],
   },
   {
     name: 'SushiSwap V3',
     dexType: DEXType.UNISWAP_V3,
-    routerAddress: '0x8A21F534350174092bF581A056D43B59a997A811',
-    quoterAddress: '0x0d4A22F2d2DDCe8d753c1869E4c1d739B948332C',
+    routerAddress: '0x8A21F6768C1f8075791D08546Dadf6daA0bE820c',
+    quoterAddress: '0x0524E833cCD057e4d7A296e3aaAb9f7675964Ce1',
+    factoryAddress: '0x1af415a1EbA07a4986a52B6f2e7dE7003D82231e',
     supportedFeeTiers: [100, 500, 3000, 10000],
   },
   {
     name: 'PancakeSwap V3',
     dexType: DEXType.UNISWAP_V3,
-    routerAddress: '0x13f4EA83D0bd40E75C8222255bc855a974568Dd4',
+    routerAddress: '0x32226588378236Fd0c7c4053999F88aC0e5cAc77',
     quoterAddress: '0xB048Bbc1Ee6b733FFfCFb9e9CeF7375518e25997',
+    factoryAddress: '0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865',
     supportedFeeTiers: [100, 500, 3000, 10000],
   },
 ];
 
-/** Protocols whose router is wired into SniperSearcher / SwapRouter02 execution. */
-export const EXECUTION_VENUE_PROTOCOLS: DEXProtocolConfig[] = ARBITRUM_DEX_PROTOCOLS.filter(
-  (p) => p.name === 'Uniswap V3'
-);
+/** Protocols whose router is wired into SniperSearcher / SwapRouter02-style execution. */
+export const EXECUTION_VENUE_PROTOCOLS: DEXProtocolConfig[] = ARBITRUM_DEX_PROTOCOLS;
+
+const UNISWAP_V3_FACTORY_ABI = [
+  'function getPool(address tokenA, address tokenB, uint24 fee) external view returns (address pool)',
+];
+
+/**
+ * Resolve a Uniswap-V3-style pool address for a token pair + fee tier via the venue's
+ * own factory. Used only by the Bitquery cross-check (flashSizer.ts) — quoting itself
+ * doesn't need this, the Quoter contracts resolve pools internally.
+ */
+export async function resolvePoolAddress(
+  factoryAddress: string,
+  tokenA: string,
+  tokenB: string,
+  feeTier: number,
+  provider: Provider
+): Promise<string | null> {
+  try {
+    const factory = new ethers.Contract(factoryAddress, UNISWAP_V3_FACTORY_ABI, provider);
+    const pool: string = await factory.getPool(tokenA, tokenB, feeTier);
+    if (!pool || pool === ethers.ZeroAddress) return null;
+    return pool;
+  } catch {
+    return null;
+  }
+}
 
 export class DEXAggregator {
   private provider: Provider;
