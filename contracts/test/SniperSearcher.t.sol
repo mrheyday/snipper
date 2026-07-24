@@ -5,7 +5,12 @@ import {Test} from "forge-std/Test.sol";
 import {SniperSearcher} from "../src/SniperSearcher.sol";
 import {ERC20Mock} from "./mocks/ERC20Mock.sol";
 
-/// @dev SwapRouter02-shaped mock: pulls tokenIn, mints amountIn of tokenOut to recipient.
+/// @dev SwapRouter02-shaped mock (4-field, no deadline): pulls tokenIn, mints amountIn of
+///      tokenOut to recipient. Represents Uniswap V3 / PancakeSwap V3 (legacyAbi = false).
+///      Its exactInput selector differs from MockLegacyRouter02's below (different tuple
+///      shape), so calling the wrong mock with the wrong ABI naturally reverts with no
+///      matching function — the same failure signature the real SushiSwap V3 router produced
+///      when called with the wrong ABI during the mainnet-fork dry run.
 contract MockRouter02 {
     struct ExactInputParams {
         bytes path;
@@ -25,10 +30,36 @@ contract MockRouter02 {
     }
 }
 
+/// @dev Older ISwapRouter-shaped mock (5-field, deadline INSIDE the struct). Represents
+///      SushiSwap V3's real deployed router (legacyAbi = true) — see
+///      docs/superpowers/specs/2026-07-23-multi-venue-swap-execution-design.md,
+///      "Dual-ABI router support", for the on-chain proof this shape is required.
+contract MockLegacyRouter02 {
+    struct ExactInputParams {
+        bytes path;
+        address recipient;
+        uint256 deadline;
+        uint256 amountIn;
+        uint256 amountOutMinimum;
+    }
+
+    function exactInput(ExactInputParams calldata params) external payable returns (uint256 amountOut) {
+        require(params.path.length >= 43, "path");
+        require(params.deadline > 0, "deadline");
+        address tokenIn = address(bytes20(params.path[0:20]));
+        address tokenOut = address(bytes20(params.path[params.path.length - 20:]));
+        require(ERC20Mock(tokenIn).transferFrom(msg.sender, address(this), params.amountIn), "in");
+        amountOut = params.amountIn;
+        require(amountOut >= params.amountOutMinimum, "min");
+        ERC20Mock(tokenOut).mint(params.recipient, amountOut);
+    }
+}
+
 contract SniperSearcherTest is Test {
     SniperSearcher public searcher;
     MockRouter02 public router;
     MockRouter02 public router2;
+    MockLegacyRouter02 public legacyRouter;
     ERC20Mock public tokenA;
     ERC20Mock public tokenB;
     address public owner;
@@ -47,8 +78,13 @@ contract SniperSearcherTest is Test {
 
     event Swap(address indexed tokenIn, address indexed tokenOut, uint256 amountIn, uint256 amountOut);
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
-    event RouterAllowed(address indexed router);
+    event RouterAllowed(address indexed router, bool legacyAbi);
     event RouterRevoked(address indexed router);
+
+    function _oneRouter(address r, bool legacyAbi) internal pure returns (SniperSearcher.RouterConfig[] memory out) {
+        out = new SniperSearcher.RouterConfig[](1);
+        out[0] = SniperSearcher.RouterConfig({router: r, legacyAbi: legacyAbi});
+    }
 
     function setUp() public {
         owner = makeAddr("owner");
@@ -57,10 +93,9 @@ contract SniperSearcherTest is Test {
 
         router = new MockRouter02();
         router2 = new MockRouter02();
-        address[] memory routers = new address[](1);
-        routers[0] = address(router);
+        legacyRouter = new MockLegacyRouter02();
         vm.prank(owner);
-        searcher = new SniperSearcher(routers, 0);
+        searcher = new SniperSearcher(_oneRouter(address(router), false), 0);
 
         tokenA = new ERC20Mock("Token A", "TKNA", 18);
         tokenB = new ERC20Mock("Token B", "TKNB", 18);
@@ -77,18 +112,17 @@ contract SniperSearcherTest is Test {
     function test_Deployment() public view {
         assertEq(searcher.owner(), owner);
         assertTrue(searcher.allowedRouters(address(router)));
+        assertFalse(searcher.routerIsLegacyAbi(address(router)));
         assertEq(searcher.chainId(), block.chainid);
     }
 
     function test_RevertWhen_ZeroRouterInInitialList() public {
-        address[] memory routers = new address[](1);
-        routers[0] = address(0);
         vm.expectRevert(ZeroAddress.selector);
-        new SniperSearcher(routers, 0);
+        new SniperSearcher(_oneRouter(address(0), false), 0);
     }
 
     function test_RevertWhen_NoRoutersProvided() public {
-        address[] memory routers = new address[](0);
+        SniperSearcher.RouterConfig[] memory routers = new SniperSearcher.RouterConfig[](0);
         vm.expectRevert(NoRoutersProvided.selector);
         new SniperSearcher(routers, 0);
     }
@@ -132,8 +166,8 @@ contract SniperSearcherTest is Test {
 
         vm.prank(owner);
         vm.expectEmit(true, false, false, false);
-        emit RouterAllowed(address(router2));
-        searcher.allowRouter(address(router2));
+        emit RouterAllowed(address(router2), false);
+        searcher.allowRouter(address(router2), false);
 
         vm.startPrank(owner);
         tokenA.approve(address(searcher), amountIn);
@@ -161,7 +195,40 @@ contract SniperSearcherTest is Test {
     function test_RevertWhen_AllowRouter_NotOwner() public {
         vm.prank(user);
         vm.expectRevert(Unauthorized.selector);
-        searcher.allowRouter(address(router2));
+        searcher.allowRouter(address(router2), false);
+    }
+
+    function test_LegacyRouter_ExecutesViaFiveFieldABI() public {
+        vm.prank(owner);
+        searcher.allowRouter(address(legacyRouter), true);
+        assertTrue(searcher.routerIsLegacyAbi(address(legacyRouter)));
+
+        bytes memory path = _pathAB();
+        uint256 amountIn = 100e18;
+
+        vm.startPrank(owner);
+        tokenA.approve(address(searcher), amountIn);
+        uint256 out = searcher.executeSwap(address(tokenA), address(legacyRouter), amountIn, path, amountIn);
+        vm.stopPrank();
+
+        assertEq(out, amountIn);
+        assertEq(tokenB.balanceOf(owner), amountIn);
+    }
+
+    function test_LegacyRouter_CalledWithWrongAbiShape_Reverts() public {
+        // A router registered as SwapRouter02-style (legacyAbi=false) but which is actually a
+        // MockLegacyRouter02 (5-field) has no matching 4-field selector, so the call reverts —
+        // this proves the branch actually dispatches a different call, not just a different
+        // struct value on the same call.
+        vm.prank(owner);
+        searcher.allowRouter(address(legacyRouter), false);
+
+        bytes memory path = _pathAB();
+        vm.startPrank(owner);
+        tokenA.approve(address(searcher), 100e18);
+        vm.expectRevert(SwapFailed.selector);
+        searcher.executeSwap(address(tokenA), address(legacyRouter), 100e18, path, 0);
+        vm.stopPrank();
     }
 
     function test_AllowedExecutor_CanSwapAndReceivesOut() public {
@@ -281,10 +348,8 @@ contract SniperSearcherTest is Test {
     }
 
     function test_MinAmountBitLength_RevertsOnDustBeforeAnyExternalCall() public {
-        address[] memory routers = new address[](1);
-        routers[0] = address(router);
         vm.startPrank(owner);
-        SniperSearcher strict = new SniperSearcher(routers, 32);
+        SniperSearcher strict = new SniperSearcher(_oneRouter(address(router), false), 32);
 
         bytes memory path = _pathAB();
         tokenA.approve(address(strict), 1);
@@ -294,10 +359,8 @@ contract SniperSearcherTest is Test {
     }
 
     function test_MinAmountBitLength_GasSavedOnRejectedDust() public {
-        address[] memory routers = new address[](1);
-        routers[0] = address(router);
         vm.startPrank(owner);
-        SniperSearcher strict = new SniperSearcher(routers, 32);
+        SniperSearcher strict = new SniperSearcher(_oneRouter(address(router), false), 32);
 
         bytes memory path = _pathAB();
         tokenA.approve(address(strict), 1);
@@ -314,7 +377,7 @@ contract SniperSearcherTest is Test {
     function test_Multicall_BatchesOwnerCallsWithCorrectSender() public {
         bytes[] memory calls = new bytes[](2);
         calls[0] = abi.encodeCall(SniperSearcher.allowExecutor, (executor));
-        calls[1] = abi.encodeCall(SniperSearcher.allowRouter, (address(router2)));
+        calls[1] = abi.encodeCall(SniperSearcher.allowRouter, (address(router2), false));
         vm.prank(owner);
         searcher.multicall(calls);
         assertTrue(searcher.allowedExecutors(executor));

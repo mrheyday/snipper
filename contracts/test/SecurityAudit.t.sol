@@ -27,8 +27,8 @@ contract AuditTest is Test {
 
         // Deploy contracts
         vm.prank(owner);
-        address[] memory routers = new address[](1);
-        routers[0] = address(this);
+        SniperSearcher.RouterConfig[] memory routers = new SniperSearcher.RouterConfig[](1);
+        routers[0] = SniperSearcher.RouterConfig({router: address(this), legacyAbi: false});
         searcher = new SniperSearcher(routers, 0);
         flashReceiver = new FlashLoanReceiver(address(searcher), address(this));
         address[] memory routers2 = new address[](1);

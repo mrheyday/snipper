@@ -11,10 +11,28 @@ interface IERC20 {
 }
 
 /// @dev Uniswap-V3-style SwapRouter02 exactInput (no per-call deadline field).
+///      Used by routers registered with legacyAbi = false (Uniswap V3, PancakeSwap V3).
 interface IUniswapV3Router02 {
     struct ExactInputParams {
         bytes path;
         address recipient;
+        uint256 amountIn;
+        uint256 amountOutMinimum;
+    }
+
+    function exactInput(ExactInputParams calldata params) external payable returns (uint256 amountOut);
+}
+
+/// @dev Older-generation Uniswap V3 periphery ISwapRouter exactInput — deadline INSIDE the
+///      struct. Used by routers registered with legacyAbi = true (SushiSwap V3's real deployed
+///      router on Arbitrum uses this shape, not SwapRouter02's — confirmed via mainnet-fork
+///      dry run 2026-07-24: the 4-field call reverts with empty data, the 5-field call with
+///      deadline succeeds).
+interface ILegacySwapRouter {
+    struct ExactInputParams {
+        bytes path;
+        address recipient;
+        uint256 deadline;
         uint256 amountIn;
         uint256 amountOutMinimum;
     }
@@ -35,20 +53,31 @@ error RouterNotAllowed(address router);
 error NoRoutersProvided();
 
 /// @title SniperSearcher
-/// @notice Owner-scoped Uniswap-V3-style exact-input executor for MEV / flash-loan callers.
+/// @notice Owner-scoped exact-input executor for MEV / flash-loan callers, supporting two
+///         Uniswap-V3-family router ABI shapes (SwapRouter02-style and older ISwapRouter-style).
 /// @dev Allowed executors (e.g. FlashLoanReceiver) pull tokenIn via transferFrom, swap on
-///      an allowlisted router, then receive tokenOut back for Aave repay or profit.
+///      an allowlisted router (using the ABI shape recorded for that router), then receive
+///      tokenOut back for Aave repay or profit.
 contract SniperSearcher is Multicallable {
     /// @dev Uni V3 single-hop path = token(20) + fee(3) + token(20) = 43 bytes.
     uint256 private constant MIN_PATH_LENGTH = 43;
     /// @dev Default max age for executeSwap when caller omits an explicit deadline.
     uint256 private constant DEFAULT_DEADLINE_SECONDS = 120;
 
+    /// @param router Router contract address.
+    /// @param legacyAbi True = older ISwapRouter (5-field ExactInputParams, deadline inside).
+    ///        False = SwapRouter02-style (4-field, no deadline field).
+    struct RouterConfig {
+        address router;
+        bool legacyAbi;
+    }
+
     address public owner;
     uint256 public immutable chainId;
 
     mapping(address executor => bool allowed) public allowedExecutors;
     mapping(address router => bool allowed) public allowedRouters;
+    mapping(address router => bool legacy) public routerIsLegacyAbi;
 
     /// @notice Min bit-length of amountIn (0 = disabled). Immutable dust short-circuit.
     uint256 public immutable minAmountBitLength;
@@ -61,7 +90,7 @@ contract SniperSearcher is Multicallable {
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
     event ExecutorAllowed(address indexed executor);
     event ExecutorRevoked(address indexed executor);
-    event RouterAllowed(address indexed router);
+    event RouterAllowed(address indexed router, bool legacyAbi);
     event RouterRevoked(address indexed router);
 
     modifier onlyOwner() {
@@ -81,13 +110,15 @@ contract SniperSearcher is Multicallable {
         locked = false;
     }
 
-    constructor(address[] memory initialRouters, uint256 _minAmountBitLength) {
+    constructor(RouterConfig[] memory initialRouters, uint256 _minAmountBitLength) {
         if (initialRouters.length == 0) revert NoRoutersProvided();
         owner = msg.sender;
         for (uint256 i = 0; i < initialRouters.length; ++i) {
-            if (initialRouters[i] == address(0)) revert ZeroAddress();
-            allowedRouters[initialRouters[i]] = true;
-            emit RouterAllowed(initialRouters[i]);
+            address r = initialRouters[i].router;
+            if (r == address(0)) revert ZeroAddress();
+            allowedRouters[r] = true;
+            routerIsLegacyAbi[r] = initialRouters[i].legacyAbi;
+            emit RouterAllowed(r, initialRouters[i].legacyAbi);
         }
         minAmountBitLength = _minAmountBitLength;
         uint256 id;
@@ -108,10 +139,11 @@ contract SniperSearcher is Multicallable {
         emit ExecutorRevoked(executor);
     }
 
-    function allowRouter(address router) external onlyOwner {
+    function allowRouter(address router, bool legacyAbi) external onlyOwner {
         if (router == address(0)) revert ZeroAddress();
         allowedRouters[router] = true;
-        emit RouterAllowed(router);
+        routerIsLegacyAbi[router] = legacyAbi;
+        emit RouterAllowed(router, legacyAbi);
     }
 
     function revokeRouter(address router) external onlyOwner {
@@ -212,17 +244,33 @@ contract SniperSearcher is Multicallable {
         SafeTransferLib.safeTransferFrom(tokenIn, msg.sender, address(this), amountIn);
         SafeTransferLib.safeApproveWithRetry(tokenIn, router, amountIn);
 
-        try IUniswapV3Router02(router).exactInput(
-            IUniswapV3Router02.ExactInputParams({
-                path: path,
-                recipient: address(this),
-                amountIn: amountIn,
-                amountOutMinimum: minAmountOut
-            })
-        ) returns (uint256 out) {
-            amountOut = out;
-        } catch {
-            revert SwapFailed();
+        if (routerIsLegacyAbi[router]) {
+            try ILegacySwapRouter(router).exactInput(
+                ILegacySwapRouter.ExactInputParams({
+                    path: path,
+                    recipient: address(this),
+                    deadline: deadline,
+                    amountIn: amountIn,
+                    amountOutMinimum: minAmountOut
+                })
+            ) returns (uint256 out) {
+                amountOut = out;
+            } catch {
+                revert SwapFailed();
+            }
+        } else {
+            try IUniswapV3Router02(router).exactInput(
+                IUniswapV3Router02.ExactInputParams({
+                    path: path,
+                    recipient: address(this),
+                    amountIn: amountIn,
+                    amountOutMinimum: minAmountOut
+                })
+            ) returns (uint256 out) {
+                amountOut = out;
+            } catch {
+                revert SwapFailed();
+            }
         }
 
         SafeTransferLib.safeApprove(tokenIn, router, 0);

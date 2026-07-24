@@ -44,8 +44,8 @@ contract FlashLoanReceiverTest is Test {
         pool = address(this);
 
         router = new MockRouter02();
-        address[] memory routers = new address[](1);
-        routers[0] = address(router);
+        SniperSearcher.RouterConfig[] memory routers = new SniperSearcher.RouterConfig[](1);
+        routers[0] = SniperSearcher.RouterConfig({router: address(router), legacyAbi: false});
         searcher = new SniperSearcher(routers, 0);
         flash = new FlashLoanReceiver(address(searcher), pool);
 
@@ -93,8 +93,8 @@ contract FlashLoanReceiverTest is Test {
 
     function test_ExecuteOperation_RevertsWhenExecutorNotAllowed() public {
         // Fresh searcher without allowExecutor
-        address[] memory routers = new address[](1);
-        routers[0] = address(router);
+        SniperSearcher.RouterConfig[] memory routers = new SniperSearcher.RouterConfig[](1);
+        routers[0] = SniperSearcher.RouterConfig({router: address(router), legacyAbi: false});
         SniperSearcher locked = new SniperSearcher(routers, 0);
         FlashLoanReceiver orphan = new FlashLoanReceiver(address(locked), pool);
 
