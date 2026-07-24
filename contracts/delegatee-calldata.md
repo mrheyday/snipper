@@ -151,3 +151,45 @@ Hot path uses:
 - `src/eip7702.ts` → DelegatedExecutor `0x107db2c4` or BEBE `0xe9ae5c53` + `encodeBatchExecute`
 
 ABIs: `src/contractABIs.ts` (regenerated from Foundry `out/`).
+
+
+## Router wiring (production-critical)
+
+SniperSearcher and DelegatedExecutor swap against an owner-managed router allowlist
+(Uniswap V3, SushiSwap V3, PancakeSwap V3). The router address is passed per-call; the
+contract picks the router's exactInput ABI shape from its recorded `routerIsLegacyAbi` flag:
+
+- **SwapRouter02-style** (Uniswap V3, PancakeSwap V3 — `legacyAbi = false`):
+  `exactInput((bytes path, address recipient, uint256 amountIn, uint256 amountOutMinimum))`
+  selector `0xb858183f`
+- **Legacy ISwapRouter** (SushiSwap V3 — `legacyAbi = true`):
+  `exactInput((bytes path, address recipient, uint256 deadline, uint256 amountIn, uint256 amountOutMinimum))`
+  selector `0xc04b8d59`
+
+SushiSwap V3's real Arbitrum router uses the legacy 5-field shape (deadline inside the struct) —
+confirmed by mainnet-fork dry run 2026-07-24; the 4-field call reverts with empty data. See
+`docs/superpowers/specs/2026-07-23-multi-venue-swap-execution-design.md`, "Dual-ABI router support".
+
+### Flash path wiring
+
+```
+EOA --type4--> BEBE.execute([CALL FlashLoanReceiver.initiateFlashLoan(token, router, ...)])
+  --> Aave.flashLoanSimple(receiver=Flash)
+  --> Flash.executeOperation  (decodes router from params)
+      --> approve SniperSearcher
+      --> SniperSearcher.executeSwap(tokenIn, router, ...)  (must be allowExecutor'd at deploy)
+      --> path MUST round-trip to borrow asset
+      --> approve Aave for amount+premium
+```
+
+### Selector cheat-sheet (post-router-allowlist + dual-ABI, 2026-07-24)
+
+| Function | Selector |
+|----------|----------|
+| SniperSearcher.executeSwap(address,address,uint256,bytes,uint256) | 0x68281967 |
+| SniperSearcher.executeSwapWithDeadline(address,address,uint256,bytes,uint256,uint256) | 0x2628163f |
+| FlashLoanReceiver.initiateFlashLoan(address,address,uint256,bytes,uint256) | 0x23c7f08e |
+| DelegatedExecutor.executeSwap(address,address,uint256,bytes,uint256,uint256) | 0xf85b8959 |
+| BEBE / ERC7821 execute(bytes32,bytes) | 0xe9ae5c53 |
+| SwapRouter02 exactInput 4-field (Uni/Pancake) | 0xb858183f |
+| Legacy ISwapRouter exactInput 5-field (Sushi) | 0xc04b8d59 |
