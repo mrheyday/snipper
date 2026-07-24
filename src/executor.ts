@@ -8,6 +8,7 @@ const logger = new Logger('SniperExecutor');
 
 interface SwapParams {
   tokenIn: string;
+  router: string;
   amountIn: bigint;
   path: Buffer;
   minAmountOut: bigint;
@@ -61,6 +62,7 @@ export class SniperExecutor {
       const fees = await getEip1559Fees();
       const tx = await this.searcher.executeSwapWithDeadline(
         params.tokenIn,
+        params.router,
         params.amountIn,
         params.path,
         params.minAmountOut,
@@ -248,6 +250,7 @@ export class SniperExecutor {
 
       const tx = await this.searcher.executeSwapWithDeadline(
         params.tokenIn,
+        params.router,
         params.amountIn,
         params.path,
         params.minAmountOut,
@@ -403,6 +406,7 @@ export class SniperExecutor {
     try {
       const gasEstimate = await this.searcher.executeSwapWithDeadline.estimateGas(
         params.tokenIn,
+        params.router,
         params.amountIn,
         params.path,
         params.minAmountOut,
