@@ -7,6 +7,12 @@ Status: Approved (pending implementation plan)
 the router/quoter addresses in `dexAggregator.ts` were both wrong. See "Address verification"
 for what changed and why. Corrected scope: 3 execution venues, not 4.
 
+**Amendment (2026-07-24):** a mainnet-fork dry run (proving the design actually works, not just
+compiles) found that SushiSwap V3's real router does not share Uniswap V3/PancakeSwap V3's ABI
+after all. See "Dual-ABI router support" below — this changes the `SniperSearcher.sol` /
+`DelegatedExecutor.sol` contract design (a per-router ABI-variant branch, not a single interface)
+but does not change the verified addresses, the venue list, or any off-chain code.
+
 ## Goal
 
 Today, best-route *quoting* is supposed to span 5 Arbitrum DEXes (`ARBITRUM_DEX_PROTOCOLS` in
@@ -65,19 +71,21 @@ changes" below.
 
 - Remove `address public immutable swapRouter;`.
 - Add `mapping(address router => bool allowed) public allowedRouters;`.
-- Constructor takes an initial router list (`address[] memory initialRouters`) instead of one
-  address; seeds the allowlist at deploy so no extra owner tx is needed for the first routers.
-  `minAmountBitLength` and `chainId` handling unchanged.
-- Add `allowRouter(address)` / `revokeRouter(address)` (`onlyOwner`), mirroring
-  `allowExecutor`/`revokeExecutor` exactly. New events `RouterAllowed`/`RouterRevoked`.
+- Constructor takes an initial router list instead of one address; seeds the allowlist at deploy
+  so no extra owner tx is needed for the first routers. `minAmountBitLength` and `chainId`
+  handling unchanged. See "Dual-ABI router support" for the exact constructor shape — it now
+  takes a per-router ABI-variant flag alongside the address, not just a plain `address[]`.
+- Add `allowRouter(address, bool)` / `revokeRouter(address)` (`onlyOwner`), mirroring
+  `allowExecutor`/`revokeExecutor`. New events `RouterAllowed`/`RouterRevoked`.
 - `executeSwap` / `executeSwapWithDeadline` gain a `router` parameter:
   `executeSwap(address tokenIn, address router, uint256 amountIn, bytes calldata path, uint256 minAmountOut)`.
   New error `RouterNotAllowed(address router)`, checked first in `_executeSwap`, before any
   approve/transfer.
 - `_executeSwap` uses the validated `router` in place of the old immutable `swapRouter` for the
-  approve + `exactInput` call.
+  approve + `exactInput` call, branching on the router's recorded ABI variant — see "Dual-ABI
+  router support".
 - `_validatePath` is unchanged — its fee-tiered encoding (`(path.length - 20) % 23 == 0`) is valid
-  for all 3 in-scope venues (all genuine Uniswap V3 forks).
+  for all 3 in-scope venues' *path encoding* (only the router's *call shape* differs).
 
 ### `FlashLoanReceiver.sol`
 
@@ -88,14 +96,71 @@ changes" below.
 - `executeOperation` decodes `router` from `params` and passes it through to
   `ISwapExecutor.executeSwap(asset, router, amount, swapPath, minAmountOut)` (interface updated to
   match SniperSearcher's new signature).
-- Round-trip / repay-asset validation logic is unchanged — it's router-agnostic.
+- Round-trip / repay-asset validation logic is unchanged — it's router-agnostic. This contract
+  never needs to know about ABI variants; that branching is entirely internal to SniperSearcher.
 
 ### `DelegatedExecutor.sol`
 
-- Same treatment as `SniperSearcher`: `constant SWAP_ROUTER` → `allowedRouters` mapping +
-  `allowRouter`/`revokeRouter`, swap entrypoint gains a `router` parameter.
+- Same treatment as `SniperSearcher`: `constant SWAP_ROUTER` → `allowedRouters` mapping (+
+  ABI-variant mapping) + `allowRouter`/`revokeRouter`, all three swap entrypoints gain a `router`
+  parameter and the same dual-ABI branch.
 - This is groundwork only — the contract isn't reachable from the live loop today. Brought in line
   so a future activation doesn't rediscover this gap.
+
+## Dual-ABI router support (amendment, 2026-07-24)
+
+A mainnet fork dry run proved this was necessary before any of this touches real funds — it is
+not a hypothetical. Empirically, on an Arbitrum-One fork:
+
+- Calling SushiSwap V3's real router (`0x8A21F6768C1f8075791D08546Dadf6daA0bE820c`) with the
+  4-field `SwapRouter02`-style `ExactInputParams { path, recipient, amountIn, amountOutMinimum }`
+  reverts with empty data (a calldata/selector mismatch) — through `SniperSearcher` and through
+  the router directly.
+- Calling the same router, same pool, same amount, with the **older** `ISwapRouter` 5-field
+  struct — `ExactInputParams { path, recipient, deadline, amountIn, amountOutMinimum }` (deadline
+  *inside* the struct) — succeeds: real transaction, real token transfers, real `Swap` event.
+- PancakeSwap V3's router was independently verified during design (the `"STF"` probe) to use the
+  4-field shape, same as Uniswap V3. Only SushiSwap needs the older shape.
+
+So the three execution venues are not one uniform ABI — they're two. The fix is contained
+entirely to the two swap-executing contracts; **no off-chain code changes**, because quoting
+already goes through separate Quoter contracts (unaffected — confirmed working throughout
+sizing/routing) and the off-chain call chain only ever passes an opaque `router` address through;
+the contract itself decides which shape to call.
+
+- Add a second interface:
+  ```solidity
+  interface ILegacySwapRouter {
+      struct ExactInputParams {
+          bytes path;
+          address recipient;
+          uint256 deadline;
+          uint256 amountIn;
+          uint256 amountOutMinimum;
+      }
+      function exactInput(ExactInputParams calldata params) external payable returns (uint256 amountOut);
+  }
+  ```
+- Add `mapping(address router => bool legacy) public routerIsLegacyAbi;` alongside
+  `allowedRouters`, set together whenever a router is added (constructor and `allowRouter`).
+- Constructor takes a `RouterConfig[] { address router; bool legacyAbi; }` array instead of a
+  plain `address[]`. `allowRouter(address router, bool legacyAbi)` gains the same second
+  parameter.
+- `_executeSwap` branches once, right before the router call:
+  `routerIsLegacyAbi[router] ? ILegacySwapRouter(router).exactInput(...with deadline...) :
+  IUniswapV3Router02(router).exactInput(...without deadline...)`, both still wrapped in the
+  existing `try/catch { revert SwapFailed(); }`.
+- Uniswap V3 and PancakeSwap V3 are registered with `legacyAbi = false`; SushiSwap V3 with
+  `legacyAbi = true`.
+- `DeployRegistry.sol`'s `sniperInitialRouters()` becomes `sniperInitialRouterConfigs()` returning
+  the paired `RouterConfig[]`; `Deploy.s.sol`/`Configure.s.sol`/`Verify.s.sol` updated to read and
+  check the ABI-variant flag alongside the address.
+- Off-chain (`dexAggregator.ts`, `allowlist.ts`, `flashSizer.ts`, `bridge.ts`, `flashExecutor.ts`,
+  `executor.ts`, `eip7702.ts`) — **no changes**. They already only pass an opaque `router` address
+  through calldata; the ABI decision is entirely on-chain and per-router, invisible to callers.
+- The fork dry-run (previously Task 10) must be re-run end-to-end after this fix, this time
+  actually exercising a real SushiSwap V3 swap through `SniperSearcher` (not just the router
+  directly) to close the loop.
 
 ## Off-chain changes
 
