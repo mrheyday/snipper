@@ -11,8 +11,20 @@ export const SNIPER_SEARCHER_ABI = [
     "inputs": [
       {
         "name": "initialRouters",
-        "type": "address[]",
-        "internalType": "address[]"
+        "type": "tuple[]",
+        "internalType": "struct SniperSearcher.RouterConfig[]",
+        "components": [
+          {
+            "name": "router",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "legacyAbi",
+            "type": "bool",
+            "internalType": "bool"
+          }
+        ]
       },
       {
         "name": "_minAmountBitLength",
@@ -47,6 +59,11 @@ export const SNIPER_SEARCHER_ABI = [
         "name": "router",
         "type": "address",
         "internalType": "address"
+      },
+      {
+        "name": "legacyAbi",
+        "type": "bool",
+        "internalType": "bool"
       }
     ],
     "outputs": [],
@@ -309,6 +326,25 @@ export const SNIPER_SEARCHER_ABI = [
   },
   {
     "type": "function",
+    "name": "routerIsLegacyAbi",
+    "inputs": [
+      {
+        "name": "router",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "legacy",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "transferOwnership",
     "inputs": [
       {
@@ -433,6 +469,12 @@ export const SNIPER_SEARCHER_ABI = [
         "type": "address",
         "indexed": true,
         "internalType": "address"
+      },
+      {
+        "name": "legacyAbi",
+        "type": "bool",
+        "indexed": false,
+        "internalType": "bool"
       }
     ],
     "anonymous": false
@@ -990,8 +1032,20 @@ export const DELEGATED_EXECUTOR_ABI = [
     "inputs": [
       {
         "name": "initialRouters",
-        "type": "address[]",
-        "internalType": "address[]"
+        "type": "tuple[]",
+        "internalType": "struct DelegatedExecutor.RouterConfig[]",
+        "components": [
+          {
+            "name": "router",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "legacyAbi",
+            "type": "bool",
+            "internalType": "bool"
+          }
+        ]
       },
       {
         "name": "_minAmountBitLength",
@@ -1026,6 +1080,11 @@ export const DELEGATED_EXECUTOR_ABI = [
         "name": "router",
         "type": "address",
         "internalType": "address"
+      },
+      {
+        "name": "legacyAbi",
+        "type": "bool",
+        "internalType": "bool"
       }
     ],
     "outputs": [],
@@ -1326,6 +1385,25 @@ export const DELEGATED_EXECUTOR_ABI = [
     "stateMutability": "nonpayable"
   },
   {
+    "type": "function",
+    "name": "routerIsLegacyAbi",
+    "inputs": [
+      {
+        "name": "router",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "legacy",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
     "type": "event",
     "name": "Delegated",
     "inputs": [
@@ -1379,6 +1457,12 @@ export const DELEGATED_EXECUTOR_ABI = [
         "type": "address",
         "indexed": true,
         "internalType": "address"
+      },
+      {
+        "name": "legacyAbi",
+        "type": "bool",
+        "indexed": false,
+        "internalType": "bool"
       }
     ],
     "anonymous": false
