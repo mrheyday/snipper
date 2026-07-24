@@ -25,13 +25,24 @@ export const ALLOWED_ROUTERS_DEFAULT = [
  * Borrow leg of round-trip arb must be one of these (or extra ALLOWED_TOKENS).
  */
 export const AAVE_FLASH_BASE_TOKENS = [
-  '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1', // WETH
-  '0xaf88d065e77c8cC2239327C5EDb3A432268e5831', // USDC
-  '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9', // USDT
-  '0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f', // WBTC (canonical Arbitrum One; aToken aArbWBTC 0x078f358208685046a11C85e8ad32895DED33A249 resolved dynamically via Pool.getReserveData)
-  '0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1', // DAI
-  '0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8', // USDC.e
-  '0x912CE59144191C1204E64559FE8253a0e49E6548', // ARB
+  '0xaf88d065e77c8cC2239327C5EDb3A432268e5831', // USDC — flash-available ~30.4M
+  '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1', // WETH — flash-available ~22.9k
+  // Bases deliberately limited to USDC + WETH: the profitable price differences live on
+  // these two legs (e.g. LINK/WETH depth ~$550k vs LINK/USDC ~$5.5k). USDT/WBTC/DAI/USDC.e/ARB
+  // were removed as borrow bases — they remain reachable as swap TARGETS when paired with
+  // USDC/WETH via isSnipePairAllowed. Both listed here are verified flash-loanable Aave V3
+  // Arbitrum reserves.
+] as const;
+
+/**
+ * Curated swap targets always considered against the flash bases, independent of Bitquery
+ * discovery (seeded as base×target candidates in snipeTokenSet). These are NOT flash bases —
+ * you borrow USDC/WETH and swap into these and back. Each verified on-chain with a live
+ * USDC- or WETH-paired pool on an execution venue (Uniswap/Sushi/Pancake V3).
+ */
+export const CURATED_TARGET_TOKENS = [
+  '0xf97f4df75117a78c1A5a0DBb814Af92458539FB4', // LINK — Uni V3 LINK/WETH depth ~160 WETH (~$550k)
+  '0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf', // cbBTC (Coinbase Wrapped BTC) — Uni V3 cbBTC/WETH ~4 WETH
 ] as const;
 
 function parseAddressList(raw: string, label: string): string[] {
@@ -77,9 +88,11 @@ export function getAllowedTokens(): string[] {
       a.toLowerCase()
     )
   );
-  const base = uniqLower([...AAVE_FLASH_BASE_TOKENS, ...extra]).filter(
-    (a) => !denied.has(a.toLowerCase())
-  );
+  const base = uniqLower([
+    ...AAVE_FLASH_BASE_TOKENS,
+    ...CURATED_TARGET_TOKENS,
+    ...extra,
+  ]).filter((a) => !denied.has(a.toLowerCase()));
   return base;
 }
 

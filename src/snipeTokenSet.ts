@@ -17,6 +17,7 @@ import {
   isSnipePairAllowed,
   logAllowlistSummary,
   AAVE_FLASH_BASE_TOKENS,
+  CURATED_TARGET_TOKENS,
 } from './allowlist';
 import { getReserveEligibility } from './aaveReserves';
 import { ARBITRUM_DEPLOY } from './config';
@@ -35,7 +36,7 @@ export type SnipeCandidate = {
   pool?: string;
   fee?: number;
   protocol?: string;
-  source: 'pool_created' | 'hot_pair' | 'static_base';
+  source: 'pool_created' | 'hot_pair' | 'static_base' | 'curated';
   tradeCount?: number;
   aaveLiquidity?: string;
   reasons: string[];
@@ -192,6 +193,23 @@ export async function discoverSnipeTokenSet(opts?: {
       baseSymbol: baseIsA ? h.symbolA : h.symbolB,
       targetSymbol: baseIsA ? h.symbolB : h.symbolA,
     });
+  }
+
+  // Curated targets: always evaluate LINK / cbBTC against every flash base each iteration,
+  // independent of whether Bitquery surfaced them. `add` dedupes by base_target key, so if
+  // discovery already found e.g. USDC/LINK this merges harmlessly (curated is just a floor).
+  for (const target of CURATED_TARGET_TOKENS) {
+    const targetCs = getAddress(target.toLowerCase());
+    for (const base of flashBases) {
+      add({
+        baseToken: base,
+        targetToken: targetCs,
+        source: 'curated',
+        tradeCount: 0,
+        isNewPool: false,
+        reasons: ['curated target'],
+      });
+    }
   }
 
   // Always surface static flash bases as borrow candidates (no target yet)
