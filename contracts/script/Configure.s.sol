@@ -44,9 +44,15 @@ contract Configure is Script {
 
         // --- Constructor / immutable audit ---
         console.log("[1] Constructor values (on-chain vs DeployRegistry)");
-        // swapRouter removed in favor of router allowlist
+        address[] memory expectedRouters = DeployRegistry.sniperInitialRouters();
+        for (uint256 i = 0; i < expectedRouters.length; ++i) {
+            require(ss.allowedRouters(expectedRouters[i]), "Sniper: expected router not allowlisted");
+        }
         require(ss.minAmountBitLength() == DeployRegistry.MIN_AMOUNT_BIT_LENGTH, "Sniper: minBits");
         require(ss.chainId() == block.chainid, "Sniper: chainId");
+        for (uint256 i = 0; i < expectedRouters.length; ++i) {
+            console.log("  SniperSearcher.allowedRouters[%s]  =", i, expectedRouters[i]);
+        }
         console.log("  SniperSearcher.minAmountBitLength =", ss.minAmountBitLength());
         console.log("  SniperSearcher.chainId            =", ss.chainId());
         console.log("  SniperSearcher.owner              =", ss.owner());
@@ -86,7 +92,16 @@ contract Configure is Script {
         console.log("  allowedExecutors(Flash) =", flashAllowed);
         console.log("  allowedEOAs(owner)      =", ownerAllowedEoa);
 
-        if (flashAllowed && ownerAllowedEoa) {
+        bool[] memory delegatedRouterMissing = new bool[](expectedRouters.length);
+        bool anyDelegatedRouterMissing = false;
+        for (uint256 i = 0; i < expectedRouters.length; ++i) {
+            bool allowed = de.allowedRouters(expectedRouters[i]);
+            delegatedRouterMissing[i] = !allowed;
+            if (!allowed) anyDelegatedRouterMissing = true;
+            console.log("  DelegatedExecutor.allowedRouters[%s] =", i, allowed);
+        }
+
+        if (flashAllowed && ownerAllowedEoa && !anyDelegatedRouterMissing) {
             console.log("  [OK] no on-chain writes needed");
         } else if (!broadcast) {
             console.log("  [SKIP] would configure; set PRIVATE_KEY and --broadcast to apply");
@@ -95,6 +110,11 @@ contract Configure is Script {
             }
             if (!ownerAllowedEoa) {
                 console.log("    missing: DelegatedExecutor.allowEOA(owner)");
+            }
+            for (uint256 i = 0; i < expectedRouters.length; ++i) {
+                if (delegatedRouterMissing[i]) {
+                    console.log("    missing: DelegatedExecutor.allowRouter(...)", expectedRouters[i]);
+                }
             }
         } else {
             require(vm.addr(pk) == owner, "PRIVATE_KEY is not contract owner");
@@ -107,11 +127,20 @@ contract Configure is Script {
                 console.log("  -> allowEOA(owner)");
                 de.allowEOA(owner);
             }
+            for (uint256 i = 0; i < expectedRouters.length; ++i) {
+                if (delegatedRouterMissing[i]) {
+                    console.log("  -> DelegatedExecutor.allowRouter(...)", expectedRouters[i]);
+                    de.allowRouter(expectedRouters[i]);
+                }
+            }
             vm.stopBroadcast();
             console.log("  allowedExecutors(Flash) =", ss.allowedExecutors(flash));
             console.log("  allowedEOAs(owner)      =", de.allowedEOAs(owner));
             require(ss.allowedExecutors(flash), "allowExecutor failed");
             require(de.allowedEOAs(owner), "allowEOA failed");
+            for (uint256 i = 0; i < expectedRouters.length; ++i) {
+                require(de.allowedRouters(expectedRouters[i]), "DelegatedExecutor allowRouter failed");
+            }
             console.log("  [OK] permissions configured");
         }
 

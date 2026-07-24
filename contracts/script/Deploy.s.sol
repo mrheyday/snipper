@@ -24,7 +24,6 @@ contract Deploy is Script {
         address flashLoanReceiver;
         address delegatedExecutor;
         address basicEoaBatchExecutor;
-        address swapRouter;
         address aavePool;
     }
 
@@ -36,7 +35,7 @@ contract Deploy is Script {
         require(deployerKey != 0, "PRIVATE_KEY not set");
         require(deployer != address(0), "Invalid deployer address");
 
-        (address swapRouter, uint256 minAmountBitLength) = DeployRegistry.sniperConstructorArgs();
+        (address[] memory routers, uint256 minAmountBitLength) = DeployRegistry.sniperConstructorArgs();
         address aavePool = DeployRegistry.aavePoolForChain(block.chainid);
         address canonicalBebe = DeployRegistry.BEBE;
 
@@ -46,7 +45,9 @@ contract Deploy is Script {
         console.log("Network Configuration:");
         console.log("  Chain ID:", block.chainid);
         console.log("  Deployer:", deployer);
-        console.log("  SwapRouter:", swapRouter);
+        for (uint256 i = 0; i < routers.length; ++i) {
+            console.log("  Router[%s]:", i, routers[i]);
+        }
         console.log("  Aave Pool:", aavePool);
         console.log("  minAmountBitLength:", minAmountBitLength);
         console.log("  Canonical BEBE:", canonicalBebe);
@@ -61,17 +62,14 @@ contract Deploy is Script {
         // 1. Deploy SniperSearcher(initialRouters[], minAmountBitLength)
         console.log("[1] Deploying SniperSearcher...");
         console.logBytes(DeployRegistry.sniperConstructorArgsEncoded());
-        address[] memory initialRouters = new address[](1);
-        initialRouters[0] = swapRouter;
-        SniperSearcher sniperSearcher = new SniperSearcher(initialRouters, minAmountBitLength);
+        SniperSearcher sniperSearcher = new SniperSearcher(routers, minAmountBitLength);
         console.log("    [OK] SniperSearcher deployed to:", address(sniperSearcher));
 
         // 2. Deploy DelegatedExecutor(initialRouters[], minAmountBitLength)
         console.log("[2] Deploying DelegatedExecutor...");
         console.logBytes(DeployRegistry.delegatedConstructorArgsEncoded());
-        address[] memory delegatedRouters = new address[](1);
-        delegatedRouters[0] = swapRouter;
-        DelegatedExecutor delegatedExecutor = new DelegatedExecutor(delegatedRouters, minAmountBitLength);
+        (address[] memory delegatedRouters, uint256 delegatedMinBits) = DeployRegistry.delegatedConstructorArgs();
+        DelegatedExecutor delegatedExecutor = new DelegatedExecutor(delegatedRouters, delegatedMinBits);
         console.log("    [OK] DelegatedExecutor deployed to:", address(delegatedExecutor));
 
         // 3. Deploy FlashLoanReceiver(sniper, aavePool)
@@ -112,19 +110,21 @@ contract Deploy is Script {
         console.log("  BasicEOABatchExecutor:  ", basicEoaBatchExecutor);
         console.log("");
         console.log("Configuration:");
-        console.log("  SwapRouter:             ", swapRouter);
+        for (uint256 i = 0; i < routers.length; ++i) {
+            console.log("  Router[%s]:             ", i, routers[i]);
+        }
         console.log("  AavePool:               ", aavePool);
         console.log("  minAmountBitLength:     ", minAmountBitLength);
         console.log("  Owner:                  ", deployer);
         console.log("");
         console.log("EIP-7702 roles:");
-        console.log("  DelegatedExecutor       = single-target Uniswap swaps (hardcoded router)");
+        console.log("  DelegatedExecutor       = single-target swaps via allowlisted router");
         console.log("  BasicEOABatchExecutor   = multi-target CALL batch (any contract)");
         console.log("");
         console.log("Permissions wired:");
         console.log("  SniperSearcher.allowExecutor(FlashLoanReceiver) = true");
         console.log("  FlashLoanReceiver approves SniperSearcher + Aave pool at runtime");
-        console.log("  SniperSearcher approves Uniswap SwapRouter02 per-swap then revokes");
+        console.log("  SniperSearcher approves the caller-selected allowlisted router per-swap then revokes");
         console.log("");
         console.log("Next Steps:");
         console.log("  1. Save these addresses to your .env file");
@@ -144,7 +144,6 @@ contract Deploy is Script {
                 flashLoanReceiver: address(flashLoanReceiver),
                 delegatedExecutor: address(delegatedExecutor),
                 basicEoaBatchExecutor: basicEoaBatchExecutor,
-                swapRouter: swapRouter,
                 aavePool: aavePool
             })
         );
