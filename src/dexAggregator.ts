@@ -99,13 +99,15 @@ export class DEXAggregator {
   private protocols: DEXProtocolConfig[];
 
   /**
-   * @param customProtocols Override protocol list. Production flash/direct path
-   *   must use Uniswap V3 only (SniperSearcher is hard-wired to SwapRouter02).
-   *   Pass full ARBITRUM_DEX_PROTOCOLS only for discovery/research tools.
+   * @param customProtocols Override protocol list. Production flash/direct path must use
+   *   EXECUTION_VENUE_PROTOCOLS (SniperSearcher only accepts routers on its on-chain
+   *   allowlist — currently Uniswap V3, SushiSwap V3, PancakeSwap V3). ARBITRUM_DEX_PROTOCOLS
+   *   and EXECUTION_VENUE_PROTOCOLS are currently identical; pass a narrower custom list only
+   *   for discovery/research tools that intentionally want a subset.
    */
   constructor(provider: Provider, customProtocols?: DEXProtocolConfig[]) {
     this.provider = provider;
-    // Default to Uniswap-only so size and execution share the same venue.
+    // Default to the execution-allowlisted venues so size and execution share the same set.
     this.protocols = customProtocols || EXECUTION_VENUE_PROTOCOLS;
   }
 
