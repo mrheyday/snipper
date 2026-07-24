@@ -111,6 +111,11 @@ export class DEXAggregator {
     this.protocols = customProtocols || EXECUTION_VENUE_PROTOCOLS;
   }
 
+  /** Read-only access to the configured protocol list (used by FlashSizer's Bitquery cross-check). */
+  getProtocols(): DEXProtocolConfig[] {
+    return this.protocols;
+  }
+
   /**
    * Find best swap route across all supported DEXes on Arbitrum
    */
