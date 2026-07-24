@@ -44,10 +44,21 @@ contract Configure is Script {
 
         // --- Constructor / immutable audit ---
         console.log("[1] Constructor values (on-chain vs DeployRegistry)");
-        require(ss.swapRouter() == DeployRegistry.SWAP_ROUTER, "Sniper: swapRouter mismatch");
+        (address[] memory expectedRouters, bool[] memory expectedLegacyFlags) =
+            DeployRegistry.sniperInitialRouters();
+        for (uint256 i = 0; i < expectedRouters.length; ++i) {
+            require(ss.allowedRouters(expectedRouters[i]), "Sniper: expected router not allowlisted");
+            require(
+                ss.routerIsLegacyAbi(expectedRouters[i]) == expectedLegacyFlags[i],
+                "Sniper: router legacyAbi flag mismatch"
+            );
+        }
         require(ss.minAmountBitLength() == DeployRegistry.MIN_AMOUNT_BIT_LENGTH, "Sniper: minBits");
         require(ss.chainId() == block.chainid, "Sniper: chainId");
-        console.log("  SniperSearcher.swapRouter         =", ss.swapRouter());
+        for (uint256 i = 0; i < expectedRouters.length; ++i) {
+            console.log("  SniperSearcher.allowedRouters[%s]  =", i, expectedRouters[i]);
+            console.log("    legacyAbi =", expectedLegacyFlags[i]);
+        }
         console.log("  SniperSearcher.minAmountBitLength =", ss.minAmountBitLength());
         console.log("  SniperSearcher.chainId            =", ss.chainId());
         console.log("  SniperSearcher.owner              =", ss.owner());
@@ -87,7 +98,18 @@ contract Configure is Script {
         console.log("  allowedExecutors(Flash) =", flashAllowed);
         console.log("  allowedEOAs(owner)      =", ownerAllowedEoa);
 
-        if (flashAllowed && ownerAllowedEoa) {
+        bool[] memory delegatedRouterMissing = new bool[](expectedRouters.length);
+        bool anyDelegatedRouterMissing = false;
+        for (uint256 i = 0; i < expectedRouters.length; ++i) {
+            bool allowed = de.allowedRouters(expectedRouters[i]);
+            bool legacyMatches = de.routerIsLegacyAbi(expectedRouters[i]) == expectedLegacyFlags[i];
+            delegatedRouterMissing[i] = !allowed || !legacyMatches;
+            if (delegatedRouterMissing[i]) anyDelegatedRouterMissing = true;
+            console.log("  DelegatedExecutor.allowedRouters[%s] =", i, allowed);
+            console.log("    legacyAbi matches expected:", legacyMatches);
+        }
+
+        if (flashAllowed && ownerAllowedEoa && !anyDelegatedRouterMissing) {
             console.log("  [OK] no on-chain writes needed");
         } else if (!broadcast) {
             console.log("  [SKIP] would configure; set PRIVATE_KEY and --broadcast to apply");
@@ -96,6 +118,11 @@ contract Configure is Script {
             }
             if (!ownerAllowedEoa) {
                 console.log("    missing: DelegatedExecutor.allowEOA(owner)");
+            }
+            for (uint256 i = 0; i < expectedRouters.length; ++i) {
+                if (delegatedRouterMissing[i]) {
+                    console.log("    missing/mismatched: DelegatedExecutor.allowRouter(...)", expectedRouters[i]);
+                }
             }
         } else {
             require(vm.addr(pk) == owner, "PRIVATE_KEY is not contract owner");
@@ -108,11 +135,24 @@ contract Configure is Script {
                 console.log("  -> allowEOA(owner)");
                 de.allowEOA(owner);
             }
+            for (uint256 i = 0; i < expectedRouters.length; ++i) {
+                if (delegatedRouterMissing[i]) {
+                    console.log("  -> DelegatedExecutor.allowRouter(...)", expectedRouters[i]);
+                    de.allowRouter(expectedRouters[i], expectedLegacyFlags[i]);
+                }
+            }
             vm.stopBroadcast();
             console.log("  allowedExecutors(Flash) =", ss.allowedExecutors(flash));
             console.log("  allowedEOAs(owner)      =", de.allowedEOAs(owner));
             require(ss.allowedExecutors(flash), "allowExecutor failed");
             require(de.allowedEOAs(owner), "allowEOA failed");
+            for (uint256 i = 0; i < expectedRouters.length; ++i) {
+                require(de.allowedRouters(expectedRouters[i]), "DelegatedExecutor allowRouter failed");
+                require(
+                    de.routerIsLegacyAbi(expectedRouters[i]) == expectedLegacyFlags[i],
+                    "DelegatedExecutor legacyAbi flag failed"
+                );
+            }
             console.log("  [OK] permissions configured");
         }
 

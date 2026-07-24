@@ -44,7 +44,9 @@ contract FlashLoanReceiverTest is Test {
         pool = address(this);
 
         router = new MockRouter02();
-        searcher = new SniperSearcher(address(router), 0);
+        SniperSearcher.RouterConfig[] memory routers = new SniperSearcher.RouterConfig[](1);
+        routers[0] = SniperSearcher.RouterConfig({router: address(router), legacyAbi: false});
+        searcher = new SniperSearcher(routers, 0);
         flash = new FlashLoanReceiver(address(searcher), pool);
 
         // Deploy must whitelist FlashLoanReceiver (matches Deploy.s.sol step 5)
@@ -71,7 +73,7 @@ contract FlashLoanReceiverTest is Test {
         // Simulate Aave transferring flash-borrowed A to receiver.
         tokenA.mint(address(flash), amount);
 
-        bytes memory params = abi.encode(address(tokenA), path, minOut);
+        bytes memory params = abi.encode(address(tokenA), address(router), path, minOut);
 
         // Mock returns amount of A (1:1). Mint premium so amount+premium is available.
         tokenA.mint(address(flash), premium);
@@ -91,12 +93,14 @@ contract FlashLoanReceiverTest is Test {
 
     function test_ExecuteOperation_RevertsWhenExecutorNotAllowed() public {
         // Fresh searcher without allowExecutor
-        SniperSearcher locked = new SniperSearcher(address(router), 0);
+        SniperSearcher.RouterConfig[] memory routers = new SniperSearcher.RouterConfig[](1);
+        routers[0] = SniperSearcher.RouterConfig({router: address(router), legacyAbi: false});
+        SniperSearcher locked = new SniperSearcher(routers, 0);
         FlashLoanReceiver orphan = new FlashLoanReceiver(address(locked), pool);
 
         uint256 amount = 100e18;
         tokenA.mint(address(orphan), amount);
-        bytes memory params = abi.encode(address(tokenA), _pathABA(), amount);
+        bytes memory params = abi.encode(address(tokenA), address(router), _pathABA(), amount);
 
         vm.expectRevert(); // Unauthorized from SniperSearcher
         orphan.executeOperation(address(tokenA), amount, 0, address(orphan), params);
@@ -106,7 +110,7 @@ contract FlashLoanReceiverTest is Test {
         // If searcher is allowed but flash has zero balance, transferFrom fails.
         uint256 amount = 100e18;
         // no mint to flash
-        bytes memory params = abi.encode(address(tokenA), _pathABA(), amount);
+        bytes memory params = abi.encode(address(tokenA), address(router), _pathABA(), amount);
         vm.expectRevert();
         flash.executeOperation(address(tokenA), amount, 0, address(flash), params);
     }
@@ -121,7 +125,7 @@ contract FlashLoanReceiverTest is Test {
         uint256 amount = 100e18;
         // minRepay = amount + amount*5/10000 = 100.05e18; pass lower minOut
         vm.expectRevert();
-        flash.initiateFlashLoan(address(tokenA), amount, _pathABA(), amount);
+        flash.initiateFlashLoan(address(tokenA), address(router), amount, _pathABA(), amount);
     }
 
     function test_AllowExecutor_DeployWiresFlash() public view {

@@ -4,6 +4,7 @@ import { FlashLoanExecutor } from './flashExecutor';
 import { EIP7702Executor } from './eip7702';
 import { FlashSizer } from './flashSizer';
 import { signer, provider, FLASH_USE_TYPE4 } from './config';
+import { encodePath } from './uniswap';
 
 /**
  * Execution Mode Strategy
@@ -39,6 +40,9 @@ interface SwapOpportunity {
   estimatedProfit?: bigint;
   /** Optional DEX pool for Bitquery slippage/depth sizing */
   poolAddress?: string;
+  /** Router to use for DIRECT/EIP7702 modes (ignored by FLASH_LOAN — that mode gets its
+   *  router from FlashSizer's answer, the single source of truth for execution venue). */
+  router?: string;
 }
 
 interface BridgeExecutionResult {
@@ -171,8 +175,17 @@ export class ExecutionBridge {
   private async executeDirect(opportunity: SwapOpportunity): Promise<BridgeExecutionResult> {
     console.log(`  💎 Direct execution via SniperSearcher`);
 
+    if (!opportunity.router) {
+      return {
+        success: false,
+        mode: ExecutionMode.DIRECT,
+        error: 'DIRECT mode requires opportunity.router',
+      };
+    }
+
     const result = await this.directExecutor.executeSwap({
       tokenIn: opportunity.tokenIn,
+      router: opportunity.router,
       amountIn: opportunity.amountIn,
       path: opportunity.path,
       minAmountOut: opportunity.minAmountOut,
@@ -213,6 +226,8 @@ export class ExecutionBridge {
 
     let loanAmount = opportunity.amountIn;
     let loanMinAmountOut = opportunity.minAmountOut;
+    let loanRouter = opportunity.router;
+    let loanPath = opportunity.path;
 
     if (useDynamic) {
       console.log(`  ⚡ Flash loan — computing dynamic loan size via FlashSizer...`);
@@ -228,8 +243,10 @@ export class ExecutionBridge {
           mode: ExecutionMode.FLASH_LOAN,
           error:
             'FlashSizer: no profitable loan size found. ' +
-            'Possible causes: no DEX pool for this pair (check FlashSizer logs for route), ' +
-            'insufficient Aave liquidity, or DEX round-trip fees exceed arb spread.',
+            'Possible causes: no DEX pool for this pair on Uniswap V3, SushiSwap V3, or ' +
+            'PancakeSwap V3 (check FlashSizer logs for route), insufficient Aave liquidity, ' +
+            'DEX round-trip fees exceed arb spread, or the Bitquery cross-check rejected the ' +
+            'winning venue.',
         };
       }
 
@@ -243,14 +260,29 @@ export class ExecutionBridge {
 
       loanAmount = sized.amount;
       loanMinAmountOut = sized.minAmountOut;
+      loanRouter = sized.router;
+      // FlashSizer picked this venue/feeTier for THIS amount — rebuild the path from its
+      // answer rather than trusting whatever main.ts guessed from a small upfront probe.
+      loanPath = Buffer.from(
+        encodePath([opportunity.tokenIn, opportunity.tokenOut, opportunity.tokenIn], [sized.feeTier, sized.feeTier])
+      );
     } else {
       console.log(`  ⚡ Flash loan execution via Aave V3 (fixed size from config)`);
     }
 
+    if (!loanRouter) {
+      return {
+        success: false,
+        mode: ExecutionMode.FLASH_LOAN,
+        error: 'No router resolved for flash-loan execution (dynamicFlashSize disabled and opportunity.router unset)',
+      };
+    }
+
     const result = await this.flashExecutor.executeFlashLoanArbitrage({
       token: opportunity.tokenIn,
+      router: loanRouter,
       amount: loanAmount,
-      swapPath: opportunity.path,
+      swapPath: loanPath,
       minAmountOut: loanMinAmountOut,
       useType4: FLASH_USE_TYPE4,
     });
@@ -293,8 +325,17 @@ export class ExecutionBridge {
   private async executeEIP7702(opportunity: SwapOpportunity): Promise<BridgeExecutionResult> {
     console.log(`  🔄 EIP-7702 delegated execution`);
 
+    if (!opportunity.router) {
+      return {
+        success: false,
+        mode: ExecutionMode.EIP7702,
+        error: 'EIP7702 mode requires opportunity.router',
+      };
+    }
+
     const result = await this.eip7702Executor.executeDelegatedSwap({
       tokenIn: opportunity.tokenIn,
+      router: opportunity.router,
       amountIn: opportunity.amountIn,
       path: opportunity.path,
       minAmountOut: opportunity.minAmountOut,

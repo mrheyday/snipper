@@ -36,6 +36,7 @@ export class EIP7702Integration {
   async executeDelegatedSwap(params: {
     delegatedExecutor: string;
     tokenIn: string;
+    router: string;
     amountIn: bigint;
     minAmountOut: bigint;
     deadline: number;
@@ -121,6 +122,7 @@ export class EIP7702Integration {
       logger.info('Sending type-4 delegated swap via EIP7702Executor...');
       const result: DelegatedSwapResult = await executor.executeDelegatedSwap({
         tokenIn: params.tokenIn,
+        router: params.router,
         amountIn: params.amountIn,
         path: params.swapPath,
         minAmountOut: params.minAmountOut,
@@ -217,6 +219,7 @@ export async function executeWithFullDebugging(options: {
   signerKey: string;
   delegatedExecutor: string;
   tokenIn: string;
+  router: string;
   amountIn: string;
   minAmountOut: string;
   swapPath: string;
@@ -244,6 +247,7 @@ export async function executeWithFullDebugging(options: {
   const result = await integration.executeDelegatedSwap({
     delegatedExecutor: options.delegatedExecutor,
     tokenIn: options.tokenIn,
+    router: options.router,
     amountIn: ethers.parseEther(options.amountIn),
     minAmountOut: ethers.parseEther(options.minAmountOut),
     deadline: Math.floor(Date.now() / 1000) + 300,

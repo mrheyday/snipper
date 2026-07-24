@@ -1,6 +1,6 @@
 import { ethers } from 'ethers';
 import { provider } from './config';
-import { DEXAggregator, ARBITRUM_DEX_PROTOCOLS } from './dexAggregator';
+import { DEXAggregator, EXECUTION_VENUE_PROTOCOLS, resolvePoolAddress } from './dexAggregator';
 import { Logger } from './logger';
 import { getAvailableLiquidity, getReserveEligibility } from './aaveReserves';
 import { bitquery } from './bitquery';
@@ -42,6 +42,11 @@ export interface SizedLoan {
   netProfit: bigint;
   /** Which DEX gave the best route */
   dexName: string;
+  /** Router address for the winning venue — this IS what executes on-chain (bridge.ts
+   *  rebuilds the swap path from this + feeTier rather than reusing any earlier guess). */
+  router: string;
+  /** Fee tier for the winning venue's round-trip path */
+  feeTier: number;
 }
 
 export interface SizerConfig {
@@ -99,11 +104,12 @@ export class FlashSizer {
 
   constructor(config: Partial<SizerConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
-    // Use ALL known DEX protocols for quoting — not just Uniswap V3.
-    // Execution is still Uniswap V3 only (SniperSearcher hard-wired), but the
-    // sizer must be able to see pools on Camelot, Ramses, SushiSwap etc. so
-    // that tokens without a Uni V3 pool aren't silently abandoned.
-    this.dexAggregator = new DEXAggregator(provider, ARBITRUM_DEX_PROTOCOLS);
+    // Scoped to EXECUTION_VENUE_PROTOCOLS (not the wider ARBITRUM_DEX_PROTOCOLS): whatever
+    // this search picks as "best" becomes the router/path that actually executes (see
+    // bridge.ts), so it must never consider a venue execution can't reach. No real-world
+    // regression from this scoping — main.ts's own pre-check already gates on
+    // EXECUTION_VENUE_PROTOCOLS before this class ever runs.
+    this.dexAggregator = new DEXAggregator(provider, EXECUTION_VENUE_PROTOCOLS);
   }
 
   // ─── Public API ────────────────────────────────────────────────────────────
@@ -217,14 +223,63 @@ export class FlashSizer {
 
     if (!result) {
       logger.warn(`[FlashSizer] No profitable, slippage-safe size found`);
-    } else {
-      logger.info(
-        `[FlashSizer] ✓ Optimal loan: ` +
-          `${ethers.formatUnits(result.amount, decimals)} ` +
-          `| fee: ${ethers.formatUnits(result.fee, decimals)} ` +
-          `| net profit: ${ethers.formatUnits(result.netProfit, decimals)} ` +
-          `| via ${result.dexName}`
+      return null;
+    }
+
+    logger.info(
+      `[FlashSizer] ✓ Optimal loan: ` +
+        `${ethers.formatUnits(result.amount, decimals)} ` +
+        `| fee: ${ethers.formatUnits(result.fee, decimals)} ` +
+        `| net profit: ${ethers.formatUnits(result.netProfit, decimals)} ` +
+        `| via ${result.dexName}`
+    );
+
+    // 5. Bitquery cross-check on the WINNING venue only (one call, not per search-step —
+    //    see the design spec's "Bitquery cross-check" section for why per-step/per-venue
+    //    calls would blow through rate limits).
+    if (bitquery.configured) {
+      const winningProtocol = this.dexAggregator.getProtocols().find(
+        (p) => p.routerAddress.toLowerCase() === result.router.toLowerCase()
       );
+      if (winningProtocol) {
+        const winningPool = await resolvePoolAddress(
+          winningProtocol.factoryAddress,
+          tokenIn,
+          midToken,
+          result.feeTier,
+          provider
+        );
+        if (winningPool) {
+          const bitqueryMax = await bitquery.maxInputAtSlippage(
+            winningPool,
+            tokenIn,
+            this.config.maxSlippageBps
+          );
+          if (bitqueryMax) {
+            let bitqueryCap: bigint;
+            try {
+              bitqueryCap = bitqueryMax.includes('.')
+                ? ethers.parseUnits(bitqueryMax, decimals)
+                : BigInt(bitqueryMax);
+            } catch {
+              bitqueryCap = 0n;
+            }
+            if (bitqueryCap > 0n && result.amount > bitqueryCap) {
+              logger.warn(
+                `[FlashSizer] Bitquery cross-check rejected ${result.dexName}: sized amount ` +
+                  `${ethers.formatUnits(result.amount, decimals)} exceeds Bitquery's max input ` +
+                  `${ethers.formatUnits(bitqueryCap, decimals)} at ${this.config.maxSlippageBps}bps ` +
+                  `for pool ${winningPool}`
+              );
+              return null;
+            }
+          } else {
+            logger.info(
+              `[FlashSizer] No Bitquery coverage for winning pool ${winningPool} — proceeding without cross-check`
+            );
+          }
+        }
+      }
     }
 
     return result;
@@ -328,6 +383,8 @@ export class FlashSizer {
       fee,
       netProfit,
       dexName: route.protocol.name,
+      router: route.protocol.routerAddress,
+      feeTier: route.feeTier,
     };
   }
 

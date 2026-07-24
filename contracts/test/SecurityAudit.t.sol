@@ -27,9 +27,13 @@ contract AuditTest is Test {
 
         // Deploy contracts
         vm.prank(owner);
-        searcher = new SniperSearcher(address(this), 0);
+        SniperSearcher.RouterConfig[] memory routers = new SniperSearcher.RouterConfig[](1);
+        routers[0] = SniperSearcher.RouterConfig({router: address(this), legacyAbi: false});
+        searcher = new SniperSearcher(routers, 0);
         flashReceiver = new FlashLoanReceiver(address(searcher), address(this));
-        executor = new DelegatedExecutor(0);
+        DelegatedExecutor.RouterConfig[] memory routers2 = new DelegatedExecutor.RouterConfig[](1);
+        routers2[0] = DelegatedExecutor.RouterConfig({router: address(this), legacyAbi: false});
+        executor = new DelegatedExecutor(routers2, 0);
 
         // Deploy mock tokens
         tokenA = new ERC20Mock("Token A", "TKNA", 18);
@@ -60,7 +64,7 @@ contract AuditTest is Test {
         // ATTACKER CAN CALL THIS WITHOUT onlyOwner CHECK
         vm.prank(attacker);
         vm.expectRevert(); // Will revert due to mock router, but not due to access control
-        uint256 amountOut = executor.executeSwap(address(tokenA), amountIn, path, minOut, deadline);
+        uint256 amountOut = executor.executeSwap(address(tokenA), address(this), amountIn, path, minOut, deadline);
         amountOut; // call is expected to revert; captured only to satisfy the return-value check
 
         // The reverts we see in tests are from SwapFailed (mock router failing),
@@ -84,7 +88,7 @@ contract AuditTest is Test {
         vm.prank(attacker);
         vm.expectRevert(); // Fails due to mock, but callback pattern is exposed
         uint256 amountOut =
-            executor.executeSwapWithCallback(address(tokenA), amountIn, path, minOut, deadline, maliciousCallback);
+            executor.executeSwapWithCallback(address(tokenA), address(this), amountIn, path, minOut, deadline, maliciousCallback);
         amountOut; // call is expected to revert; captured only to satisfy the return-value check
     }
 
@@ -146,7 +150,7 @@ contract AuditTest is Test {
         vm.prank(attacker);
         vm.expectRevert(); // Will fail, but shows the dangerous pattern
         uint256 amountOut =
-            executor.executeSwapWithCallback(address(tokenA), amountIn, path, minOut, deadline, reentranceCallback);
+            executor.executeSwapWithCallback(address(tokenA), address(this), amountIn, path, minOut, deadline, reentranceCallback);
         amountOut; // call is expected to revert; captured only to satisfy the return-value check
     }
 
@@ -170,7 +174,7 @@ contract AuditTest is Test {
 
         vm.prank(attacker);
         vm.expectRevert(); // Fails on swap, but shows any EOA can call
-        uint256[] memory amountsOut = executor.executeBatchSwaps(swaps, block.timestamp + 300);
+        uint256[] memory amountsOut = executor.executeBatchSwaps(swaps, address(this), block.timestamp + 300);
         amountsOut; // call is expected to revert; captured only to satisfy the return-value check
     }
 }

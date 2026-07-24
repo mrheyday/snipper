@@ -15,9 +15,9 @@ const DELEGATION_DESIGNATOR_PREFIX = '0xef0100';
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 
 const DELEGATED_EXECUTOR_IFACE = new ethers.Interface([
-  'function executeSwap(address tokenIn, uint256 amountIn, bytes calldata path, uint256 minAmountOut, uint256 deadline) external returns (uint256)',
-  'function executeSwapWithCallback(address tokenIn, uint256 amountIn, bytes calldata path, uint256 minAmountOut, uint256 deadline, bytes calldata callbackData) external returns (uint256)',
-  'function executeBatchSwaps(tuple(address tokenIn,uint256 amountIn,bytes path,uint256 minAmountOut)[] swaps, uint256 deadline) external returns (uint256[])',
+  'function executeSwap(address tokenIn, address router, uint256 amountIn, bytes calldata path, uint256 minAmountOut, uint256 deadline) external returns (uint256)',
+  'function executeSwapWithCallback(address tokenIn, address router, uint256 amountIn, bytes calldata path, uint256 minAmountOut, uint256 deadline, bytes calldata callbackData) external returns (uint256)',
+  'function executeBatchSwaps(tuple(address tokenIn,uint256 amountIn,bytes path,uint256 minAmountOut)[] swaps, address router, uint256 deadline) external returns (uint256[])',
   'function allowEOA(address eoa) external',
   'function allowedEOAs(address eoa) view returns (bool)',
 ]);
@@ -57,6 +57,8 @@ export interface Authorization {
 
 export interface DelegatedSwapParams {
   tokenIn: string;
+  /** Router DelegatedExecutor should swap against (must be on its allowedRouters). */
+  router: string;
   amountIn: bigint;
   path: Buffer | string;
   minAmountOut: bigint;
@@ -495,6 +497,7 @@ export class EIP7702Executor {
 
       const data = DELEGATED_EXECUTOR_IFACE.encodeFunctionData('executeSwap', [
         params.tokenIn,
+        params.router,
         params.amountIn,
         this.pathToHex(params.path),
         params.minAmountOut,
@@ -575,6 +578,7 @@ export class EIP7702Executor {
 
   async executeDelegatedBatchSwaps(
     swaps: DelegatedSwapParams[],
+    router: string,
     deadline: number
   ): Promise<DelegatedSwapResult> {
     try {
@@ -588,6 +592,7 @@ export class EIP7702Executor {
 
       const data = DELEGATED_EXECUTOR_IFACE.encodeFunctionData('executeBatchSwaps', [
         swapRequests,
+        router,
         deadline,
       ]);
 

@@ -10,8 +10,30 @@ library DeployRegistry {
     /*                    CONSTRUCTOR ARGUMENTS                   */
     /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
 
-    /// @dev Uniswap V3 SwapRouter02 (Arbitrum One + Sepolia).
+    /// @dev Uniswap V3 SwapRouter02 (Arbitrum One + Sepolia). SwapRouter02-style ABI
+    ///      (4-field ExactInputParams, no deadline) — legacyAbi = false.
     address internal constant SWAP_ROUTER = 0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45;
+
+    /// @dev SushiSwap V3 SwapRouter (Arbitrum One). Verified on-chain 2026-07-23: its own
+    ///      factory() call returns SWAP_ROUTER_SUSHISWAP_FACTORY; address matches
+    ///      sushiswap/v3-periphery's checked-in deployments/arbitrum/SwapRouter.json.
+    ///      Confirmed via mainnet-fork dry run 2026-07-24 to use the OLDER ISwapRouter ABI
+    ///      (5-field ExactInputParams, deadline inside the struct) — legacyAbi = true. See
+    ///      the design spec's "Dual-ABI router support" section for the on-chain proof.
+    address internal constant SWAP_ROUTER_SUSHISWAP = 0x8A21F6768C1f8075791D08546Dadf6daA0bE820c;
+
+    /// @dev SushiSwap V3 Factory (Arbitrum One).
+    address internal constant SWAP_ROUTER_SUSHISWAP_FACTORY = 0x1af415a1EbA07a4986a52B6f2e7dE7003D82231e;
+
+    /// @dev PancakeSwap V3 SmartRouter (Arbitrum One). Source:
+    ///      developer.pancakeswap.finance/contracts/v3/addresses. Verified on-chain 2026-07-23
+    ///      by probing exactInput(...) directly (reverted with Uniswap periphery's own "STF"
+    ///      transfer-failure string) and by its factory() matching PANCAKE_V3_FACTORY.
+    ///      SwapRouter02-style ABI — legacyAbi = false.
+    address internal constant SWAP_ROUTER_PANCAKESWAP = 0x32226588378236Fd0c7c4053999F88aC0e5cAc77;
+
+    /// @dev PancakeSwap V3 Factory (Arbitrum One).
+    address internal constant PANCAKE_V3_FACTORY = 0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865;
 
     /// @dev Aave V3 Pool — Arbitrum One.
     address internal constant AAVE_POOL_ARBITRUM = 0x794a61358D6845594F94dc1DB02A252b5b4814aD;
@@ -39,6 +61,15 @@ library DeployRegistry {
     address internal constant FLASH_LOAN_RECEIVER = 0xdce71b4f28dcc5686B3B4e8790bD6051345A89b8;
     address internal constant DELEGATED_EXECUTOR = 0xc7a5B0873CB174A78017A66b541B24be64fBAde4;
 
+    /// @dev Mirrors SniperSearcher.RouterConfig / DelegatedExecutor.RouterConfig's shape for
+    ///      ABI-encoding purposes only. This library deliberately does not import either
+    ///      contract (keeps it a dependency-light constants library) — field order and types
+    ///      must stay in sync with both contracts' own RouterConfig struct.
+    struct RouterEntry {
+        address router;
+        bool legacyAbi;
+    }
+
     /// @dev Preferred EIP-7702 multi-target designator: 0xef0100 || BEBE
     function eoaDelegationBebeDesignator() internal pure returns (bytes memory) {
         return abi.encodePacked(hex"ef0100", BEBE);
@@ -49,9 +80,46 @@ library DeployRegistry {
         return abi.encodePacked(hex"ef0100", DELEGATED_EXECUTOR);
     }
 
-    /// @dev SniperSearcher(swapRouter, minAmountBitLength)
-    function sniperConstructorArgs() internal pure returns (address swapRouter, uint256 minBits) {
-        return (SWAP_ROUTER, MIN_AMOUNT_BIT_LENGTH);
+    /// @dev Verified execution-venue routers: Uniswap V3, SushiSwap V3, PancakeSwap V3, paired
+    ///      with each one's ABI variant (see SWAP_ROUTER_SUSHISWAP's doc comment for why
+    ///      SushiSwap needs legacyAbi = true). Ramses and Camelot V3 are explicitly excluded —
+    ///      see the design spec's "Address verification" / "Deferred" sections for why. Shared
+    ///      by both SniperSearcher and DelegatedExecutor's constructors. Returns parallel
+    ///      arrays (not a struct array) so this library stays independent of the
+    ///      SniperSearcher/DelegatedExecutor contract types — Deploy.s.sol (which imports both)
+    ///      zips these into each contract's own RouterConfig[] type.
+    function sniperInitialRouters()
+        internal
+        pure
+        returns (address[] memory routers, bool[] memory legacyAbiFlags)
+    {
+        routers = new address[](3);
+        legacyAbiFlags = new bool[](3);
+        routers[0] = SWAP_ROUTER; // Uniswap V3
+        legacyAbiFlags[0] = false;
+        routers[1] = SWAP_ROUTER_SUSHISWAP;
+        legacyAbiFlags[1] = true;
+        routers[2] = SWAP_ROUTER_PANCAKESWAP;
+        legacyAbiFlags[2] = false;
+    }
+
+    /// @dev Same data as sniperInitialRouters(), zipped into RouterEntry[] for ABI encoding.
+    function sniperInitialRouterEntries() internal pure returns (RouterEntry[] memory entries) {
+        (address[] memory routers, bool[] memory legacyAbiFlags) = sniperInitialRouters();
+        entries = new RouterEntry[](routers.length);
+        for (uint256 i = 0; i < routers.length; ++i) {
+            entries[i] = RouterEntry({router: routers[i], legacyAbi: legacyAbiFlags[i]});
+        }
+    }
+
+    /// @dev SniperSearcher(initialRouters, minAmountBitLength) constructor args.
+    function sniperConstructorArgs()
+        internal
+        pure
+        returns (address[] memory routers, bool[] memory legacyAbiFlags, uint256 minBits)
+    {
+        (routers, legacyAbiFlags) = sniperInitialRouters();
+        minBits = MIN_AMOUNT_BIT_LENGTH;
     }
 
     /// @dev FlashLoanReceiver(swapExecutor, lendingPool) on Arbitrum One.
@@ -63,14 +131,19 @@ library DeployRegistry {
         return (SNIPER_SEARCHER, AAVE_POOL_ARBITRUM);
     }
 
-    /// @dev DelegatedExecutor(minAmountBitLength)
-    function delegatedConstructorArgs() internal pure returns (uint256 minBits) {
-        return MIN_AMOUNT_BIT_LENGTH;
+    /// @dev DelegatedExecutor(initialRouters, minAmountBitLength) constructor args.
+    function delegatedConstructorArgs()
+        internal
+        pure
+        returns (address[] memory routers, bool[] memory legacyAbiFlags, uint256 minBits)
+    {
+        (routers, legacyAbiFlags) = sniperInitialRouters();
+        minBits = MIN_AMOUNT_BIT_LENGTH;
     }
 
     /// @dev ABI-encoded constructor args for forge verify / explorers.
     function sniperConstructorArgsEncoded() internal pure returns (bytes memory) {
-        return abi.encode(SWAP_ROUTER, MIN_AMOUNT_BIT_LENGTH);
+        return abi.encode(sniperInitialRouterEntries(), MIN_AMOUNT_BIT_LENGTH);
     }
 
     function flashConstructorArgsEncodedArbitrum() internal pure returns (bytes memory) {
@@ -78,7 +151,7 @@ library DeployRegistry {
     }
 
     function delegatedConstructorArgsEncoded() internal pure returns (bytes memory) {
-        return abi.encode(MIN_AMOUNT_BIT_LENGTH);
+        return abi.encode(sniperInitialRouterEntries(), MIN_AMOUNT_BIT_LENGTH);
     }
 
     function aavePoolForChain(uint256 chainId) internal pure returns (address) {

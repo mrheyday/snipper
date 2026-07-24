@@ -8,9 +8,9 @@ import { getReserveEligibility } from './aaveReserves';
 
 const logger = new Logger('FlashLoanExecutor');
 
-/** Encoded initiateFlashLoan(address,uint256,bytes,uint256) for type-4 batches. */
+/** Encoded initiateFlashLoan(address,address,uint256,bytes,uint256) for type-4 batches. */
 const INITIATE_FLASH_IFACE = new ethers.Interface([
-  'function initiateFlashLoan(address token, uint256 amount, bytes swapPath, uint256 minAmountOut)',
+  'function initiateFlashLoan(address token, address router, uint256 amount, bytes swapPath, uint256 minAmountOut)',
 ]);
 
 // Aave V3 Arbitrum periphery addresses, verified on-chain and cross-checked against
@@ -23,6 +23,8 @@ const ARBITRUM_CHAIN_ID = 42161;
 
 interface FlashLoanParams {
   token: string;
+  /** Router SniperSearcher should swap against (must be on its allowedRouters). */
+  router: string;
   amount: bigint;
   swapPath: Buffer | string;
   minAmountOut: bigint;
@@ -163,6 +165,7 @@ export class FlashLoanExecutor {
       // Initiate flash loan (standard type-2 EIP-1559 tx)
       const tx = await this.receiver.initiateFlashLoan(
         params.token,
+        params.router,
         params.amount,
         params.swapPath,
         params.minAmountOut,
@@ -390,6 +393,7 @@ export class FlashLoanExecutor {
 
     const data = INITIATE_FLASH_IFACE.encodeFunctionData('initiateFlashLoan', [
       params.token,
+      params.router,
       params.amount,
       pathHex,
       params.minAmountOut,
@@ -483,6 +487,7 @@ export class FlashLoanExecutor {
     try {
       const gasEstimate = await this.receiver.initiateFlashLoan.estimateGas(
         params.token,
+        params.router,
         params.amount,
         params.swapPath,
         params.minAmountOut

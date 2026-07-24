@@ -1,1397 +1,1676 @@
 /**
  * Smart Contract ABIs
  * Auto-generated from Foundry build artifacts
- * Generated on: 2026-07-23
- * Deploy: Arbitrum One — SniperSearcher 0xAC7465949D3178C9F13d629c6417b2a02D50DdC8
+ * Generated on: 2026-07-24
  * Includes: SniperSearcher, FlashLoanReceiver, DelegatedExecutor, BEBE BasicEOABatchExecutor
  */
 
 export const SNIPER_SEARCHER_ABI = [
   {
-    type: 'constructor',
-    inputs: [
+    "type": "constructor",
+    "inputs": [
       {
-        name: '_swapRouter',
-        type: 'address',
-        internalType: 'address',
+        "name": "initialRouters",
+        "type": "tuple[]",
+        "internalType": "struct SniperSearcher.RouterConfig[]",
+        "components": [
+          {
+            "name": "router",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "legacyAbi",
+            "type": "bool",
+            "internalType": "bool"
+          }
+        ]
       },
       {
-        name: '_minAmountBitLength',
-        type: 'uint256',
-        internalType: 'uint256',
-      },
+        "name": "_minAmountBitLength",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
     ],
-    stateMutability: 'nonpayable',
+    "stateMutability": "nonpayable"
   },
   {
-    type: 'receive',
-    stateMutability: 'payable',
+    "type": "receive",
+    "stateMutability": "payable"
   },
   {
-    type: 'function',
-    name: 'allowExecutor',
-    inputs: [
+    "type": "function",
+    "name": "allowExecutor",
+    "inputs": [
       {
-        name: 'executor',
-        type: 'address',
-        internalType: 'address',
-      },
+        "name": "executor",
+        "type": "address",
+        "internalType": "address"
+      }
     ],
-    outputs: [],
-    stateMutability: 'nonpayable',
+    "outputs": [],
+    "stateMutability": "nonpayable"
   },
   {
-    type: 'function',
-    name: 'allowedExecutors',
-    inputs: [
+    "type": "function",
+    "name": "allowRouter",
+    "inputs": [
       {
-        name: 'executor',
-        type: 'address',
-        internalType: 'address',
+        "name": "router",
+        "type": "address",
+        "internalType": "address"
       },
+      {
+        "name": "legacyAbi",
+        "type": "bool",
+        "internalType": "bool"
+      }
     ],
-    outputs: [
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "allowedExecutors",
+    "inputs": [
       {
-        name: 'allowed',
-        type: 'bool',
-        internalType: 'bool',
-      },
+        "name": "executor",
+        "type": "address",
+        "internalType": "address"
+      }
     ],
-    stateMutability: 'view',
-  },
-  {
-    type: 'function',
-    name: 'chainId',
-    inputs: [],
-    outputs: [
+    "outputs": [
       {
-        name: '',
-        type: 'uint256',
-        internalType: 'uint256',
-      },
+        "name": "allowed",
+        "type": "bool",
+        "internalType": "bool"
+      }
     ],
-    stateMutability: 'view',
+    "stateMutability": "view"
   },
   {
-    type: 'function',
-    name: 'emergencyWithdrawETH',
-    inputs: [
+    "type": "function",
+    "name": "allowedRouters",
+    "inputs": [
       {
-        name: 'to',
-        type: 'address',
-        internalType: 'address payable',
-      },
+        "name": "router",
+        "type": "address",
+        "internalType": "address"
+      }
     ],
-    outputs: [],
-    stateMutability: 'nonpayable',
-  },
-  {
-    type: 'function',
-    name: 'emergencyWithdrawToken',
-    inputs: [
+    "outputs": [
       {
-        name: 'token',
-        type: 'address',
-        internalType: 'address',
-      },
-      {
-        name: 'to',
-        type: 'address',
-        internalType: 'address',
-      },
+        "name": "allowed",
+        "type": "bool",
+        "internalType": "bool"
+      }
     ],
-    outputs: [],
-    stateMutability: 'nonpayable',
+    "stateMutability": "view"
   },
   {
-    type: 'function',
-    name: 'executeSwap',
-    inputs: [
+    "type": "function",
+    "name": "chainId",
+    "inputs": [],
+    "outputs": [
       {
-        name: 'tokenIn',
-        type: 'address',
-        internalType: 'address',
-      },
-      {
-        name: 'amountIn',
-        type: 'uint256',
-        internalType: 'uint256',
-      },
-      {
-        name: 'path',
-        type: 'bytes',
-        internalType: 'bytes',
-      },
-      {
-        name: 'minAmountOut',
-        type: 'uint256',
-        internalType: 'uint256',
-      },
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
     ],
-    outputs: [
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "emergencyWithdrawETH",
+    "inputs": [
       {
-        name: 'amountOut',
-        type: 'uint256',
-        internalType: 'uint256',
-      },
+        "name": "to",
+        "type": "address",
+        "internalType": "address payable"
+      }
     ],
-    stateMutability: 'nonpayable',
+    "outputs": [],
+    "stateMutability": "nonpayable"
   },
   {
-    type: 'function',
-    name: 'executeSwapWithDeadline',
-    inputs: [
+    "type": "function",
+    "name": "emergencyWithdrawToken",
+    "inputs": [
       {
-        name: 'tokenIn',
-        type: 'address',
-        internalType: 'address',
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
       },
       {
-        name: 'amountIn',
-        type: 'uint256',
-        internalType: 'uint256',
-      },
-      {
-        name: 'path',
-        type: 'bytes',
-        internalType: 'bytes',
-      },
-      {
-        name: 'minAmountOut',
-        type: 'uint256',
-        internalType: 'uint256',
-      },
-      {
-        name: 'deadline',
-        type: 'uint256',
-        internalType: 'uint256',
-      },
+        "name": "to",
+        "type": "address",
+        "internalType": "address"
+      }
     ],
-    outputs: [
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "executeSwap",
+    "inputs": [
       {
-        name: 'amountOut',
-        type: 'uint256',
-        internalType: 'uint256',
+        "name": "tokenIn",
+        "type": "address",
+        "internalType": "address"
       },
+      {
+        "name": "router",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "amountIn",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "path",
+        "type": "bytes",
+        "internalType": "bytes"
+      },
+      {
+        "name": "minAmountOut",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
     ],
-    stateMutability: 'nonpayable',
-  },
-  {
-    type: 'function',
-    name: 'getBalance',
-    inputs: [
+    "outputs": [
       {
-        name: 'token',
-        type: 'address',
-        internalType: 'address',
-      },
+        "name": "amountOut",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
     ],
-    outputs: [
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "executeSwapWithDeadline",
+    "inputs": [
       {
-        name: '',
-        type: 'uint256',
-        internalType: 'uint256',
+        "name": "tokenIn",
+        "type": "address",
+        "internalType": "address"
       },
+      {
+        "name": "router",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "amountIn",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "path",
+        "type": "bytes",
+        "internalType": "bytes"
+      },
+      {
+        "name": "minAmountOut",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "deadline",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
     ],
-    stateMutability: 'view',
-  },
-  {
-    type: 'function',
-    name: 'minAmountBitLength',
-    inputs: [],
-    outputs: [
+    "outputs": [
       {
-        name: '',
-        type: 'uint256',
-        internalType: 'uint256',
-      },
+        "name": "amountOut",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
     ],
-    stateMutability: 'view',
+    "stateMutability": "nonpayable"
   },
   {
-    type: 'function',
-    name: 'multicall',
-    inputs: [
+    "type": "function",
+    "name": "getBalance",
+    "inputs": [
       {
-        name: 'data',
-        type: 'bytes[]',
-        internalType: 'bytes[]',
-      },
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      }
     ],
-    outputs: [
+    "outputs": [
       {
-        name: '',
-        type: 'bytes[]',
-        internalType: 'bytes[]',
-      },
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
     ],
-    stateMutability: 'payable',
+    "stateMutability": "view"
   },
   {
-    type: 'function',
-    name: 'owner',
-    inputs: [],
-    outputs: [
+    "type": "function",
+    "name": "minAmountBitLength",
+    "inputs": [],
+    "outputs": [
       {
-        name: '',
-        type: 'address',
-        internalType: 'address',
-      },
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
     ],
-    stateMutability: 'view',
+    "stateMutability": "view"
   },
   {
-    type: 'function',
-    name: 'revokeExecutor',
-    inputs: [
+    "type": "function",
+    "name": "multicall",
+    "inputs": [
       {
-        name: 'executor',
-        type: 'address',
-        internalType: 'address',
-      },
+        "name": "data",
+        "type": "bytes[]",
+        "internalType": "bytes[]"
+      }
     ],
-    outputs: [],
-    stateMutability: 'nonpayable',
-  },
-  {
-    type: 'function',
-    name: 'swapRouter',
-    inputs: [],
-    outputs: [
+    "outputs": [
       {
-        name: '',
-        type: 'address',
-        internalType: 'address',
-      },
+        "name": "",
+        "type": "bytes[]",
+        "internalType": "bytes[]"
+      }
     ],
-    stateMutability: 'view',
+    "stateMutability": "payable"
   },
   {
-    type: 'function',
-    name: 'transferOwnership',
-    inputs: [
+    "type": "function",
+    "name": "owner",
+    "inputs": [],
+    "outputs": [
       {
-        name: 'newOwner',
-        type: 'address',
-        internalType: 'address',
-      },
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
     ],
-    outputs: [],
-    stateMutability: 'nonpayable',
+    "stateMutability": "view"
   },
   {
-    type: 'function',
-    name: 'withdraw',
-    inputs: [
+    "type": "function",
+    "name": "revokeExecutor",
+    "inputs": [
       {
-        name: 'token',
-        type: 'address',
-        internalType: 'address',
-      },
-      {
-        name: 'to',
-        type: 'address',
-        internalType: 'address',
-      },
-      {
-        name: 'amount',
-        type: 'uint256',
-        internalType: 'uint256',
-      },
+        "name": "executor",
+        "type": "address",
+        "internalType": "address"
+      }
     ],
-    outputs: [],
-    stateMutability: 'nonpayable',
+    "outputs": [],
+    "stateMutability": "nonpayable"
   },
   {
-    type: 'function',
-    name: 'withdrawAll',
-    inputs: [
+    "type": "function",
+    "name": "revokeRouter",
+    "inputs": [
       {
-        name: 'tokens',
-        type: 'address[]',
-        internalType: 'address[]',
-      },
-      {
-        name: 'to',
-        type: 'address',
-        internalType: 'address',
-      },
+        "name": "router",
+        "type": "address",
+        "internalType": "address"
+      }
     ],
-    outputs: [],
-    stateMutability: 'nonpayable',
+    "outputs": [],
+    "stateMutability": "nonpayable"
   },
   {
-    type: 'function',
-    name: 'withdrawETH',
-    inputs: [
+    "type": "function",
+    "name": "routerIsLegacyAbi",
+    "inputs": [
       {
-        name: 'to',
-        type: 'address',
-        internalType: 'address payable',
-      },
-      {
-        name: 'amount',
-        type: 'uint256',
-        internalType: 'uint256',
-      },
+        "name": "router",
+        "type": "address",
+        "internalType": "address"
+      }
     ],
-    outputs: [],
-    stateMutability: 'nonpayable',
-  },
-  {
-    type: 'event',
-    name: 'ExecutorAllowed',
-    inputs: [
+    "outputs": [
       {
-        name: 'executor',
-        type: 'address',
-        indexed: true,
-        internalType: 'address',
-      },
+        "name": "legacy",
+        "type": "bool",
+        "internalType": "bool"
+      }
     ],
-    anonymous: false,
+    "stateMutability": "view"
   },
   {
-    type: 'event',
-    name: 'ExecutorRevoked',
-    inputs: [
+    "type": "function",
+    "name": "transferOwnership",
+    "inputs": [
       {
-        name: 'executor',
-        type: 'address',
-        indexed: true,
-        internalType: 'address',
-      },
+        "name": "newOwner",
+        "type": "address",
+        "internalType": "address"
+      }
     ],
-    anonymous: false,
+    "outputs": [],
+    "stateMutability": "nonpayable"
   },
   {
-    type: 'event',
-    name: 'OwnershipTransferred',
-    inputs: [
+    "type": "function",
+    "name": "withdraw",
+    "inputs": [
       {
-        name: 'previousOwner',
-        type: 'address',
-        indexed: true,
-        internalType: 'address',
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
       },
       {
-        name: 'newOwner',
-        type: 'address',
-        indexed: true,
-        internalType: 'address',
+        "name": "to",
+        "type": "address",
+        "internalType": "address"
       },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
     ],
-    anonymous: false,
+    "outputs": [],
+    "stateMutability": "nonpayable"
   },
   {
-    type: 'event',
-    name: 'Swap',
-    inputs: [
+    "type": "function",
+    "name": "withdrawAll",
+    "inputs": [
       {
-        name: 'tokenIn',
-        type: 'address',
-        indexed: true,
-        internalType: 'address',
+        "name": "tokens",
+        "type": "address[]",
+        "internalType": "address[]"
       },
       {
-        name: 'tokenOut',
-        type: 'address',
-        indexed: true,
-        internalType: 'address',
-      },
-      {
-        name: 'amountIn',
-        type: 'uint256',
-        indexed: false,
-        internalType: 'uint256',
-      },
-      {
-        name: 'amountOut',
-        type: 'uint256',
-        indexed: false,
-        internalType: 'uint256',
-      },
+        "name": "to",
+        "type": "address",
+        "internalType": "address"
+      }
     ],
-    anonymous: false,
+    "outputs": [],
+    "stateMutability": "nonpayable"
   },
   {
-    type: 'event',
-    name: 'Withdrawn',
-    inputs: [
+    "type": "function",
+    "name": "withdrawETH",
+    "inputs": [
       {
-        name: 'token',
-        type: 'address',
-        indexed: true,
-        internalType: 'address',
+        "name": "to",
+        "type": "address",
+        "internalType": "address payable"
       },
       {
-        name: 'to',
-        type: 'address',
-        indexed: true,
-        internalType: 'address',
-      },
-      {
-        name: 'amount',
-        type: 'uint256',
-        indexed: false,
-        internalType: 'uint256',
-      },
+        "name": "amount",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
     ],
-    anonymous: false,
+    "outputs": [],
+    "stateMutability": "nonpayable"
   },
   {
-    type: 'error',
-    name: 'AmountTooSmall',
-    inputs: [
+    "type": "event",
+    "name": "ExecutorAllowed",
+    "inputs": [
       {
-        name: 'amountIn',
-        type: 'uint256',
-        internalType: 'uint256',
-      },
-      {
-        name: 'minBitLength',
-        type: 'uint256',
-        internalType: 'uint256',
-      },
+        "name": "executor",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
     ],
+    "anonymous": false
   },
   {
-    type: 'error',
-    name: 'DeadlineExceeded',
-    inputs: [],
-  },
-  {
-    type: 'error',
-    name: 'InsufficientAmountOut',
-    inputs: [
+    "type": "event",
+    "name": "ExecutorRevoked",
+    "inputs": [
       {
-        name: 'received',
-        type: 'uint256',
-        internalType: 'uint256',
-      },
-      {
-        name: 'minimum',
-        type: 'uint256',
-        internalType: 'uint256',
-      },
+        "name": "executor",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
     ],
+    "anonymous": false
   },
   {
-    type: 'error',
-    name: 'InvalidPath',
-    inputs: [],
-  },
-  {
-    type: 'error',
-    name: 'Reentrancy',
-    inputs: [],
-  },
-  {
-    type: 'error',
-    name: 'SwapFailed',
-    inputs: [],
-  },
-  {
-    type: 'error',
-    name: 'TokenInMismatch',
-    inputs: [
+    "type": "event",
+    "name": "OwnershipTransferred",
+    "inputs": [
       {
-        name: 'expected',
-        type: 'address',
-        internalType: 'address',
+        "name": "previousOwner",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
       },
       {
-        name: 'pathTokenIn',
-        type: 'address',
-        internalType: 'address',
-      },
+        "name": "newOwner",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
     ],
+    "anonymous": false
   },
   {
-    type: 'error',
-    name: 'Unauthorized',
-    inputs: [],
+    "type": "event",
+    "name": "RouterAllowed",
+    "inputs": [
+      {
+        "name": "router",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "legacyAbi",
+        "type": "bool",
+        "indexed": false,
+        "internalType": "bool"
+      }
+    ],
+    "anonymous": false
   },
   {
-    type: 'error',
-    name: 'ZeroAddress',
-    inputs: [],
+    "type": "event",
+    "name": "RouterRevoked",
+    "inputs": [
+      {
+        "name": "router",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
   },
+  {
+    "type": "event",
+    "name": "Swap",
+    "inputs": [
+      {
+        "name": "tokenIn",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "tokenOut",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "amountIn",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "amountOut",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "Withdrawn",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "to",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "error",
+    "name": "AmountTooSmall",
+    "inputs": [
+      {
+        "name": "amountIn",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "minBitLength",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "DeadlineExceeded",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InsufficientAmountOut",
+    "inputs": [
+      {
+        "name": "received",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "minimum",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "InvalidPath",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NoRoutersProvided",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "Reentrancy",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "RouterNotAllowed",
+    "inputs": [
+      {
+        "name": "router",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "SwapFailed",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "TokenInMismatch",
+    "inputs": [
+      {
+        "name": "expected",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "pathTokenIn",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "Unauthorized",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ZeroAddress",
+    "inputs": []
+  }
 ] as const;
 
 export const FLASH_LOAN_RECEIVER_ABI = [
   {
-    type: 'constructor',
-    inputs: [
+    "type": "constructor",
+    "inputs": [
       {
-        name: '_swapExecutor',
-        type: 'address',
-        internalType: 'address',
+        "name": "_swapExecutor",
+        "type": "address",
+        "internalType": "address"
       },
       {
-        name: '_lendingPool',
-        type: 'address',
-        internalType: 'address',
-      },
+        "name": "_lendingPool",
+        "type": "address",
+        "internalType": "address"
+      }
     ],
-    stateMutability: 'nonpayable',
+    "stateMutability": "nonpayable"
   },
   {
-    type: 'receive',
-    stateMutability: 'payable',
+    "type": "receive",
+    "stateMutability": "payable"
   },
   {
-    type: 'function',
-    name: 'FLASH_LOAN_PREMIUM_RATE_BPS_HINT',
-    inputs: [],
-    outputs: [
+    "type": "function",
+    "name": "FLASH_LOAN_PREMIUM_RATE_BPS_HINT",
+    "inputs": [],
+    "outputs": [
       {
-        name: '',
-        type: 'uint256',
-        internalType: 'uint256',
-      },
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
     ],
-    stateMutability: 'view',
+    "stateMutability": "view"
   },
   {
-    type: 'function',
-    name: 'emergencyWithdrawETH',
-    inputs: [
+    "type": "function",
+    "name": "emergencyWithdrawETH",
+    "inputs": [
       {
-        name: 'to',
-        type: 'address',
-        internalType: 'address payable',
-      },
+        "name": "to",
+        "type": "address",
+        "internalType": "address payable"
+      }
     ],
-    outputs: [],
-    stateMutability: 'nonpayable',
+    "outputs": [],
+    "stateMutability": "nonpayable"
   },
   {
-    type: 'function',
-    name: 'emergencyWithdrawToken',
-    inputs: [
+    "type": "function",
+    "name": "emergencyWithdrawToken",
+    "inputs": [
       {
-        name: 'token',
-        type: 'address',
-        internalType: 'address',
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
       },
       {
-        name: 'to',
-        type: 'address',
-        internalType: 'address',
-      },
+        "name": "to",
+        "type": "address",
+        "internalType": "address"
+      }
     ],
-    outputs: [],
-    stateMutability: 'nonpayable',
+    "outputs": [],
+    "stateMutability": "nonpayable"
   },
   {
-    type: 'function',
-    name: 'executeOperation',
-    inputs: [
+    "type": "function",
+    "name": "executeOperation",
+    "inputs": [
       {
-        name: 'asset',
-        type: 'address',
-        internalType: 'address',
+        "name": "asset",
+        "type": "address",
+        "internalType": "address"
       },
       {
-        name: 'amount',
-        type: 'uint256',
-        internalType: 'uint256',
+        "name": "amount",
+        "type": "uint256",
+        "internalType": "uint256"
       },
       {
-        name: 'premium',
-        type: 'uint256',
-        internalType: 'uint256',
+        "name": "premium",
+        "type": "uint256",
+        "internalType": "uint256"
       },
       {
-        name: 'initiator',
-        type: 'address',
-        internalType: 'address',
+        "name": "initiator",
+        "type": "address",
+        "internalType": "address"
       },
       {
-        name: 'params',
-        type: 'bytes',
-        internalType: 'bytes',
-      },
+        "name": "params",
+        "type": "bytes",
+        "internalType": "bytes"
+      }
     ],
-    outputs: [
+    "outputs": [
       {
-        name: '',
-        type: 'bool',
-        internalType: 'bool',
-      },
+        "name": "",
+        "type": "bool",
+        "internalType": "bool"
+      }
     ],
-    stateMutability: 'nonpayable',
+    "stateMutability": "nonpayable"
   },
   {
-    type: 'function',
-    name: 'flashLoanPremiumBps',
-    inputs: [],
-    outputs: [
+    "type": "function",
+    "name": "flashLoanPremiumBps",
+    "inputs": [],
+    "outputs": [
       {
-        name: '',
-        type: 'uint256',
-        internalType: 'uint256',
-      },
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
     ],
-    stateMutability: 'view',
+    "stateMutability": "view"
   },
   {
-    type: 'function',
-    name: 'getBalance',
-    inputs: [
+    "type": "function",
+    "name": "getBalance",
+    "inputs": [
       {
-        name: 'token',
-        type: 'address',
-        internalType: 'address',
-      },
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      }
     ],
-    outputs: [
+    "outputs": [
       {
-        name: '',
-        type: 'uint256',
-        internalType: 'uint256',
-      },
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
     ],
-    stateMutability: 'view',
+    "stateMutability": "view"
   },
   {
-    type: 'function',
-    name: 'initiateFlashLoan',
-    inputs: [
+    "type": "function",
+    "name": "initiateFlashLoan",
+    "inputs": [
       {
-        name: 'token',
-        type: 'address',
-        internalType: 'address',
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
       },
       {
-        name: 'amount',
-        type: 'uint256',
-        internalType: 'uint256',
+        "name": "router",
+        "type": "address",
+        "internalType": "address"
       },
       {
-        name: 'swapPath',
-        type: 'bytes',
-        internalType: 'bytes',
+        "name": "amount",
+        "type": "uint256",
+        "internalType": "uint256"
       },
       {
-        name: 'minAmountOut',
-        type: 'uint256',
-        internalType: 'uint256',
+        "name": "swapPath",
+        "type": "bytes",
+        "internalType": "bytes"
       },
+      {
+        "name": "minAmountOut",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
     ],
-    outputs: [],
-    stateMutability: 'nonpayable',
+    "outputs": [],
+    "stateMutability": "nonpayable"
   },
   {
-    type: 'function',
-    name: 'lendingPool',
-    inputs: [],
-    outputs: [
+    "type": "function",
+    "name": "lendingPool",
+    "inputs": [],
+    "outputs": [
       {
-        name: '',
-        type: 'address',
-        internalType: 'address',
-      },
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
     ],
-    stateMutability: 'view',
+    "stateMutability": "view"
   },
   {
-    type: 'function',
-    name: 'owner',
-    inputs: [],
-    outputs: [
+    "type": "function",
+    "name": "owner",
+    "inputs": [],
+    "outputs": [
       {
-        name: '',
-        type: 'address',
-        internalType: 'address',
-      },
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
     ],
-    stateMutability: 'view',
+    "stateMutability": "view"
   },
   {
-    type: 'function',
-    name: 'swapExecutor',
-    inputs: [],
-    outputs: [
+    "type": "function",
+    "name": "swapExecutor",
+    "inputs": [],
+    "outputs": [
       {
-        name: '',
-        type: 'address',
-        internalType: 'address',
-      },
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
     ],
-    stateMutability: 'view',
+    "stateMutability": "view"
   },
   {
-    type: 'function',
-    name: 'transferOwnership',
-    inputs: [
+    "type": "function",
+    "name": "transferOwnership",
+    "inputs": [
       {
-        name: 'newOwner',
-        type: 'address',
-        internalType: 'address',
-      },
+        "name": "newOwner",
+        "type": "address",
+        "internalType": "address"
+      }
     ],
-    outputs: [],
-    stateMutability: 'nonpayable',
+    "outputs": [],
+    "stateMutability": "nonpayable"
   },
   {
-    type: 'function',
-    name: 'withdraw',
-    inputs: [
+    "type": "function",
+    "name": "withdraw",
+    "inputs": [
       {
-        name: 'token',
-        type: 'address',
-        internalType: 'address',
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
       },
       {
-        name: 'to',
-        type: 'address',
-        internalType: 'address',
+        "name": "to",
+        "type": "address",
+        "internalType": "address"
       },
       {
-        name: 'amount',
-        type: 'uint256',
-        internalType: 'uint256',
-      },
+        "name": "amount",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
     ],
-    outputs: [],
-    stateMutability: 'nonpayable',
+    "outputs": [],
+    "stateMutability": "nonpayable"
   },
   {
-    type: 'function',
-    name: 'withdrawETH',
-    inputs: [
+    "type": "function",
+    "name": "withdrawETH",
+    "inputs": [
       {
-        name: 'to',
-        type: 'address',
-        internalType: 'address payable',
+        "name": "to",
+        "type": "address",
+        "internalType": "address payable"
       },
       {
-        name: 'amount',
-        type: 'uint256',
-        internalType: 'uint256',
-      },
+        "name": "amount",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
     ],
-    outputs: [],
-    stateMutability: 'nonpayable',
+    "outputs": [],
+    "stateMutability": "nonpayable"
   },
   {
-    type: 'event',
-    name: 'FlashLoanExecuted',
-    inputs: [
+    "type": "event",
+    "name": "FlashLoanExecuted",
+    "inputs": [
       {
-        name: 'token',
-        type: 'address',
-        indexed: true,
-        internalType: 'address',
+        "name": "token",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
       },
       {
-        name: 'amount',
-        type: 'uint256',
-        indexed: false,
-        internalType: 'uint256',
+        "name": "amount",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
       },
       {
-        name: 'premium',
-        type: 'uint256',
-        indexed: false,
-        internalType: 'uint256',
+        "name": "premium",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
       },
       {
-        name: 'profit',
-        type: 'uint256',
-        indexed: false,
-        internalType: 'uint256',
-      },
+        "name": "profit",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
     ],
-    anonymous: false,
+    "anonymous": false
   },
   {
-    type: 'event',
-    name: 'OwnershipTransferred',
-    inputs: [
+    "type": "event",
+    "name": "OwnershipTransferred",
+    "inputs": [
       {
-        name: 'previousOwner',
-        type: 'address',
-        indexed: true,
-        internalType: 'address',
+        "name": "previousOwner",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
       },
       {
-        name: 'newOwner',
-        type: 'address',
-        indexed: true,
-        internalType: 'address',
-      },
+        "name": "newOwner",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
     ],
-    anonymous: false,
+    "anonymous": false
   },
   {
-    type: 'error',
-    name: 'InsufficientRepayment',
-    inputs: [
+    "type": "error",
+    "name": "InsufficientRepayment",
+    "inputs": [
       {
-        name: 'available',
-        type: 'uint256',
-        internalType: 'uint256',
+        "name": "available",
+        "type": "uint256",
+        "internalType": "uint256"
       },
       {
-        name: 'required',
-        type: 'uint256',
-        internalType: 'uint256',
-      },
-    ],
+        "name": "required",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
   },
   {
-    type: 'error',
-    name: 'InvalidSwapPath',
-    inputs: [],
+    "type": "error",
+    "name": "InvalidSwapPath",
+    "inputs": []
   },
   {
-    type: 'error',
-    name: 'MinAmountOutTooLow',
-    inputs: [
+    "type": "error",
+    "name": "MinAmountOutTooLow",
+    "inputs": [
       {
-        name: 'minAmountOut',
-        type: 'uint256',
-        internalType: 'uint256',
-      },
-      {
-        name: 'minRepay',
-        type: 'uint256',
-        internalType: 'uint256',
-      },
-    ],
-  },
-  {
-    type: 'error',
-    name: 'PathMustEndInBorrowAsset',
-    inputs: [
-      {
-        name: 'pathEnd',
-        type: 'address',
-        internalType: 'address',
+        "name": "minAmountOut",
+        "type": "uint256",
+        "internalType": "uint256"
       },
       {
-        name: 'borrowAsset',
-        type: 'address',
-        internalType: 'address',
+        "name": "minRepay",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "PathMustEndInBorrowAsset",
+    "inputs": [
+      {
+        "name": "pathEnd",
+        "type": "address",
+        "internalType": "address"
       },
-    ],
+      {
+        "name": "borrowAsset",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
   },
   {
-    type: 'error',
-    name: 'Reentrancy',
-    inputs: [],
+    "type": "error",
+    "name": "Reentrancy",
+    "inputs": []
   },
   {
-    type: 'error',
-    name: 'Unauthorized',
-    inputs: [],
+    "type": "error",
+    "name": "Unauthorized",
+    "inputs": []
   },
   {
-    type: 'error',
-    name: 'ZeroAddress',
-    inputs: [],
-  },
+    "type": "error",
+    "name": "ZeroAddress",
+    "inputs": []
+  }
 ] as const;
 
 export const DELEGATED_EXECUTOR_ABI = [
   {
-    type: 'constructor',
-    inputs: [
+    "type": "constructor",
+    "inputs": [
       {
-        name: '_minAmountBitLength',
-        type: 'uint256',
-        internalType: 'uint256',
-      },
-    ],
-    stateMutability: 'nonpayable',
-  },
-  {
-    type: 'receive',
-    stateMutability: 'payable',
-  },
-  {
-    type: 'function',
-    name: 'allowEOA',
-    inputs: [
-      {
-        name: 'eoa',
-        type: 'address',
-        internalType: 'address',
-      },
-    ],
-    outputs: [],
-    stateMutability: 'nonpayable',
-  },
-  {
-    type: 'function',
-    name: 'allowedEOAs',
-    inputs: [
-      {
-        name: 'eoa',
-        type: 'address',
-        internalType: 'address',
-      },
-    ],
-    outputs: [
-      {
-        name: 'allowed',
-        type: 'bool',
-        internalType: 'bool',
-      },
-    ],
-    stateMutability: 'view',
-  },
-  {
-    type: 'function',
-    name: 'executeBatchSwaps',
-    inputs: [
-      {
-        name: 'swaps',
-        type: 'tuple[]',
-        internalType: 'struct DelegatedExecutor.SwapRequest[]',
-        components: [
+        "name": "initialRouters",
+        "type": "tuple[]",
+        "internalType": "struct DelegatedExecutor.RouterConfig[]",
+        "components": [
           {
-            name: 'tokenIn',
-            type: 'address',
-            internalType: 'address',
+            "name": "router",
+            "type": "address",
+            "internalType": "address"
           },
           {
-            name: 'amountIn',
-            type: 'uint256',
-            internalType: 'uint256',
+            "name": "legacyAbi",
+            "type": "bool",
+            "internalType": "bool"
+          }
+        ]
+      },
+      {
+        "name": "_minAmountBitLength",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "receive",
+    "stateMutability": "payable"
+  },
+  {
+    "type": "function",
+    "name": "allowEOA",
+    "inputs": [
+      {
+        "name": "eoa",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "allowRouter",
+    "inputs": [
+      {
+        "name": "router",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "legacyAbi",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "allowedEOAs",
+    "inputs": [
+      {
+        "name": "eoa",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "allowed",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "allowedRouters",
+    "inputs": [
+      {
+        "name": "router",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "allowed",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "executeBatchSwaps",
+    "inputs": [
+      {
+        "name": "swaps",
+        "type": "tuple[]",
+        "internalType": "struct DelegatedExecutor.SwapRequest[]",
+        "components": [
+          {
+            "name": "tokenIn",
+            "type": "address",
+            "internalType": "address"
           },
           {
-            name: 'path',
-            type: 'bytes',
-            internalType: 'bytes',
+            "name": "amountIn",
+            "type": "uint256",
+            "internalType": "uint256"
           },
           {
-            name: 'minAmountOut',
-            type: 'uint256',
-            internalType: 'uint256',
+            "name": "path",
+            "type": "bytes",
+            "internalType": "bytes"
           },
-        ],
+          {
+            "name": "minAmountOut",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
       },
       {
-        name: 'deadline',
-        type: 'uint256',
-        internalType: 'uint256',
+        "name": "router",
+        "type": "address",
+        "internalType": "address"
       },
-    ],
-    outputs: [
       {
-        name: 'amountsOut',
-        type: 'uint256[]',
-        internalType: 'uint256[]',
-      },
+        "name": "deadline",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
     ],
-    stateMutability: 'nonpayable',
+    "outputs": [
+      {
+        "name": "amountsOut",
+        "type": "uint256[]",
+        "internalType": "uint256[]"
+      }
+    ],
+    "stateMutability": "nonpayable"
   },
   {
-    type: 'function',
-    name: 'executeSwap',
-    inputs: [
+    "type": "function",
+    "name": "executeSwap",
+    "inputs": [
       {
-        name: 'tokenIn',
-        type: 'address',
-        internalType: 'address',
+        "name": "tokenIn",
+        "type": "address",
+        "internalType": "address"
       },
       {
-        name: 'amountIn',
-        type: 'uint256',
-        internalType: 'uint256',
+        "name": "router",
+        "type": "address",
+        "internalType": "address"
       },
       {
-        name: 'path',
-        type: 'bytes',
-        internalType: 'bytes',
+        "name": "amountIn",
+        "type": "uint256",
+        "internalType": "uint256"
       },
       {
-        name: 'minAmountOut',
-        type: 'uint256',
-        internalType: 'uint256',
+        "name": "path",
+        "type": "bytes",
+        "internalType": "bytes"
       },
       {
-        name: 'deadline',
-        type: 'uint256',
-        internalType: 'uint256',
+        "name": "minAmountOut",
+        "type": "uint256",
+        "internalType": "uint256"
       },
+      {
+        "name": "deadline",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
     ],
-    outputs: [
+    "outputs": [
       {
-        name: 'amountOut',
-        type: 'uint256',
-        internalType: 'uint256',
-      },
+        "name": "amountOut",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
     ],
-    stateMutability: 'nonpayable',
+    "stateMutability": "nonpayable"
   },
   {
-    type: 'function',
-    name: 'executeSwapWithCallback',
-    inputs: [
+    "type": "function",
+    "name": "executeSwapWithCallback",
+    "inputs": [
       {
-        name: 'tokenIn',
-        type: 'address',
-        internalType: 'address',
+        "name": "tokenIn",
+        "type": "address",
+        "internalType": "address"
       },
       {
-        name: 'amountIn',
-        type: 'uint256',
-        internalType: 'uint256',
+        "name": "router",
+        "type": "address",
+        "internalType": "address"
       },
       {
-        name: 'path',
-        type: 'bytes',
-        internalType: 'bytes',
+        "name": "amountIn",
+        "type": "uint256",
+        "internalType": "uint256"
       },
       {
-        name: 'minAmountOut',
-        type: 'uint256',
-        internalType: 'uint256',
+        "name": "path",
+        "type": "bytes",
+        "internalType": "bytes"
       },
       {
-        name: 'deadline',
-        type: 'uint256',
-        internalType: 'uint256',
+        "name": "minAmountOut",
+        "type": "uint256",
+        "internalType": "uint256"
       },
       {
-        name: 'callbackData',
-        type: 'bytes',
-        internalType: 'bytes',
+        "name": "deadline",
+        "type": "uint256",
+        "internalType": "uint256"
       },
+      {
+        "name": "callbackData",
+        "type": "bytes",
+        "internalType": "bytes"
+      }
     ],
-    outputs: [
+    "outputs": [
       {
-        name: 'amountOut',
-        type: 'uint256',
-        internalType: 'uint256',
-      },
+        "name": "amountOut",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
     ],
-    stateMutability: 'nonpayable',
+    "stateMutability": "nonpayable"
   },
   {
-    type: 'function',
-    name: 'minAmountBitLength',
-    inputs: [],
-    outputs: [
+    "type": "function",
+    "name": "minAmountBitLength",
+    "inputs": [],
+    "outputs": [
       {
-        name: '',
-        type: 'uint256',
-        internalType: 'uint256',
-      },
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
     ],
-    stateMutability: 'view',
+    "stateMutability": "view"
   },
   {
-    type: 'function',
-    name: 'multicall',
-    inputs: [
+    "type": "function",
+    "name": "multicall",
+    "inputs": [
       {
-        name: 'data',
-        type: 'bytes[]',
-        internalType: 'bytes[]',
-      },
+        "name": "data",
+        "type": "bytes[]",
+        "internalType": "bytes[]"
+      }
     ],
-    outputs: [
+    "outputs": [
       {
-        name: '',
-        type: 'bytes[]',
-        internalType: 'bytes[]',
-      },
+        "name": "",
+        "type": "bytes[]",
+        "internalType": "bytes[]"
+      }
     ],
-    stateMutability: 'payable',
+    "stateMutability": "payable"
   },
   {
-    type: 'function',
-    name: 'owner',
-    inputs: [],
-    outputs: [
+    "type": "function",
+    "name": "owner",
+    "inputs": [],
+    "outputs": [
       {
-        name: '',
-        type: 'address',
-        internalType: 'address',
-      },
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
     ],
-    stateMutability: 'view',
+    "stateMutability": "view"
   },
   {
-    type: 'function',
-    name: 'rescueETH',
-    inputs: [
+    "type": "function",
+    "name": "rescueETH",
+    "inputs": [
       {
-        name: 'to',
-        type: 'address',
-        internalType: 'address payable',
+        "name": "to",
+        "type": "address",
+        "internalType": "address payable"
       },
       {
-        name: 'amount',
-        type: 'uint256',
-        internalType: 'uint256',
-      },
+        "name": "amount",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
     ],
-    outputs: [],
-    stateMutability: 'nonpayable',
+    "outputs": [],
+    "stateMutability": "nonpayable"
   },
   {
-    type: 'function',
-    name: 'rescueToken',
-    inputs: [
+    "type": "function",
+    "name": "rescueToken",
+    "inputs": [
       {
-        name: 'token',
-        type: 'address',
-        internalType: 'address',
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
       },
       {
-        name: 'to',
-        type: 'address',
-        internalType: 'address',
+        "name": "to",
+        "type": "address",
+        "internalType": "address"
       },
       {
-        name: 'amount',
-        type: 'uint256',
-        internalType: 'uint256',
-      },
+        "name": "amount",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
     ],
-    outputs: [],
-    stateMutability: 'nonpayable',
+    "outputs": [],
+    "stateMutability": "nonpayable"
   },
   {
-    type: 'function',
-    name: 'revokeEOA',
-    inputs: [
+    "type": "function",
+    "name": "revokeEOA",
+    "inputs": [
       {
-        name: 'eoa',
-        type: 'address',
-        internalType: 'address',
-      },
+        "name": "eoa",
+        "type": "address",
+        "internalType": "address"
+      }
     ],
-    outputs: [],
-    stateMutability: 'nonpayable',
+    "outputs": [],
+    "stateMutability": "nonpayable"
   },
   {
-    type: 'event',
-    name: 'Delegated',
-    inputs: [
+    "type": "function",
+    "name": "revokeRouter",
+    "inputs": [
       {
-        name: 'eoa',
-        type: 'address',
-        indexed: true,
-        internalType: 'address',
-      },
-      {
-        name: 'nonce',
-        type: 'bytes32',
-        indexed: false,
-        internalType: 'bytes32',
-      },
+        "name": "router",
+        "type": "address",
+        "internalType": "address"
+      }
     ],
-    anonymous: false,
+    "outputs": [],
+    "stateMutability": "nonpayable"
   },
   {
-    type: 'event',
-    name: 'EOAAllowed',
-    inputs: [
+    "type": "function",
+    "name": "routerIsLegacyAbi",
+    "inputs": [
       {
-        name: 'eoa',
-        type: 'address',
-        indexed: true,
-        internalType: 'address',
-      },
+        "name": "router",
+        "type": "address",
+        "internalType": "address"
+      }
     ],
-    anonymous: false,
-  },
-  {
-    type: 'event',
-    name: 'EOARevoked',
-    inputs: [
+    "outputs": [
       {
-        name: 'eoa',
-        type: 'address',
-        indexed: true,
-        internalType: 'address',
-      },
+        "name": "legacy",
+        "type": "bool",
+        "internalType": "bool"
+      }
     ],
-    anonymous: false,
+    "stateMutability": "view"
   },
   {
-    type: 'event',
-    name: 'Swap',
-    inputs: [
+    "type": "event",
+    "name": "Delegated",
+    "inputs": [
       {
-        name: 'tokenIn',
-        type: 'address',
-        indexed: true,
-        internalType: 'address',
+        "name": "eoa",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
       },
       {
-        name: 'tokenOut',
-        type: 'address',
-        indexed: true,
-        internalType: 'address',
-      },
-      {
-        name: 'amountIn',
-        type: 'uint256',
-        indexed: false,
-        internalType: 'uint256',
-      },
-      {
-        name: 'amountOut',
-        type: 'uint256',
-        indexed: false,
-        internalType: 'uint256',
-      },
+        "name": "nonce",
+        "type": "bytes32",
+        "indexed": false,
+        "internalType": "bytes32"
+      }
     ],
-    anonymous: false,
+    "anonymous": false
   },
   {
-    type: 'error',
-    name: 'AmountTooSmall',
-    inputs: [
+    "type": "event",
+    "name": "EOAAllowed",
+    "inputs": [
       {
-        name: 'amountIn',
-        type: 'uint256',
-        internalType: 'uint256',
-      },
-      {
-        name: 'minBitLength',
-        type: 'uint256',
-        internalType: 'uint256',
-      },
+        "name": "eoa",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
     ],
+    "anonymous": false
   },
   {
-    type: 'error',
-    name: 'CallbackDisabled',
-    inputs: [],
-  },
-  {
-    type: 'error',
-    name: 'DeadlineExceeded',
-    inputs: [],
-  },
-  {
-    type: 'error',
-    name: 'InvalidPath',
-    inputs: [],
-  },
-  {
-    type: 'error',
-    name: 'SwapFailed',
-    inputs: [],
-  },
-  {
-    type: 'error',
-    name: 'TokenInMismatch',
-    inputs: [
+    "type": "event",
+    "name": "EOARevoked",
+    "inputs": [
       {
-        name: 'expected',
-        type: 'address',
-        internalType: 'address',
-      },
-      {
-        name: 'pathTokenIn',
-        type: 'address',
-        internalType: 'address',
-      },
+        "name": "eoa",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
     ],
+    "anonymous": false
   },
   {
-    type: 'error',
-    name: 'ZeroAddress',
-    inputs: [],
+    "type": "event",
+    "name": "RouterAllowed",
+    "inputs": [
+      {
+        "name": "router",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "legacyAbi",
+        "type": "bool",
+        "indexed": false,
+        "internalType": "bool"
+      }
+    ],
+    "anonymous": false
   },
+  {
+    "type": "event",
+    "name": "RouterRevoked",
+    "inputs": [
+      {
+        "name": "router",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "Swap",
+    "inputs": [
+      {
+        "name": "tokenIn",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "tokenOut",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "amountIn",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "amountOut",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "error",
+    "name": "AmountTooSmall",
+    "inputs": [
+      {
+        "name": "amountIn",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "minBitLength",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "CallbackDisabled",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "DeadlineExceeded",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidPath",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NoRoutersProvided",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "RouterNotAllowed",
+    "inputs": [
+      {
+        "name": "router",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "SwapFailed",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "TokenInMismatch",
+    "inputs": [
+      {
+        "name": "expected",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "pathTokenIn",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "ZeroAddress",
+    "inputs": []
+  }
 ] as const;
 
 export const BEBE_BASIC_EOA_BATCH_EXECUTOR_ABI = [
   {
-    type: 'fallback',
-    stateMutability: 'payable',
+    "type": "fallback",
+    "stateMutability": "payable"
   },
   {
-    type: 'receive',
-    stateMutability: 'payable',
+    "type": "receive",
+    "stateMutability": "payable"
   },
   {
-    type: 'function',
-    name: 'execute',
-    inputs: [
+    "type": "function",
+    "name": "execute",
+    "inputs": [
       {
-        name: 'mode',
-        type: 'bytes32',
-        internalType: 'bytes32',
+        "name": "mode",
+        "type": "bytes32",
+        "internalType": "bytes32"
       },
       {
-        name: 'executionData',
-        type: 'bytes',
-        internalType: 'bytes',
-      },
+        "name": "executionData",
+        "type": "bytes",
+        "internalType": "bytes"
+      }
     ],
-    outputs: [],
-    stateMutability: 'payable',
+    "outputs": [],
+    "stateMutability": "payable"
   },
   {
-    type: 'function',
-    name: 'isValidSignature',
-    inputs: [
+    "type": "function",
+    "name": "isValidSignature",
+    "inputs": [
       {
-        name: 'hash',
-        type: 'bytes32',
-        internalType: 'bytes32',
+        "name": "hash",
+        "type": "bytes32",
+        "internalType": "bytes32"
       },
       {
-        name: 'signature',
-        type: 'bytes',
-        internalType: 'bytes',
-      },
+        "name": "signature",
+        "type": "bytes",
+        "internalType": "bytes"
+      }
     ],
-    outputs: [
+    "outputs": [
       {
-        name: 'result',
-        type: 'bytes4',
-        internalType: 'bytes4',
-      },
+        "name": "result",
+        "type": "bytes4",
+        "internalType": "bytes4"
+      }
     ],
-    stateMutability: 'view',
+    "stateMutability": "view"
   },
   {
-    type: 'function',
-    name: 'supportsExecutionMode',
-    inputs: [
+    "type": "function",
+    "name": "supportsExecutionMode",
+    "inputs": [
       {
-        name: 'mode',
-        type: 'bytes32',
-        internalType: 'bytes32',
-      },
+        "name": "mode",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
     ],
-    outputs: [
+    "outputs": [
       {
-        name: 'result',
-        type: 'bool',
-        internalType: 'bool',
-      },
+        "name": "result",
+        "type": "bool",
+        "internalType": "bool"
+      }
     ],
-    stateMutability: 'view',
+    "stateMutability": "view"
   },
   {
-    type: 'error',
-    name: 'BatchOfBatchesDecodingError',
-    inputs: [],
+    "type": "error",
+    "name": "BatchOfBatchesDecodingError",
+    "inputs": []
   },
   {
-    type: 'error',
-    name: 'FnSelectorNotRecognized',
-    inputs: [],
+    "type": "error",
+    "name": "FnSelectorNotRecognized",
+    "inputs": []
   },
   {
-    type: 'error',
-    name: 'UnsupportedExecutionMode',
-    inputs: [],
-  },
+    "type": "error",
+    "name": "UnsupportedExecutionMode",
+    "inputs": []
+  }
 ] as const;
 
 export const CONTRACT_ABIS = {

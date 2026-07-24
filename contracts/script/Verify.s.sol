@@ -38,10 +38,18 @@ contract Verify is Script {
 
         address expectedPool = DeployRegistry.aavePoolForChain(block.chainid);
 
-        // --- SniperSearcher (constructor: swapRouter, minAmountBitLength) ---
+        // --- SniperSearcher (constructor: RouterConfig[] initialRouters, minAmountBitLength) ---
         require(_isContract(sniperSearcher), "SniperSearcher: no code");
         SniperSearcher ss = SniperSearcher(payable(sniperSearcher));
-        require(ss.swapRouter() == DeployRegistry.SWAP_ROUTER, "SniperSearcher: bad swapRouter");
+        (address[] memory expectedRouters, bool[] memory expectedLegacyFlags) =
+            DeployRegistry.sniperInitialRouters();
+        for (uint256 i = 0; i < expectedRouters.length; ++i) {
+            require(ss.allowedRouters(expectedRouters[i]), "SniperSearcher: expected router not allowlisted");
+            require(
+                ss.routerIsLegacyAbi(expectedRouters[i]) == expectedLegacyFlags[i],
+                "SniperSearcher: router legacyAbi flag mismatch"
+            );
+        }
         require(
             ss.minAmountBitLength() == DeployRegistry.MIN_AMOUNT_BIT_LENGTH, "SniperSearcher: minBits"
         );
@@ -49,8 +57,11 @@ contract Verify is Script {
         require(ss.allowedExecutors(flashLoanReceiver), "SniperSearcher: Flash not allowedExecutor");
         console.log("[PASS] SniperSearcher wiring + constructor");
         console.log("       owner=", ss.owner());
-        console.log("       swapRouter=", ss.swapRouter());
         console.log("       minAmountBitLength=", ss.minAmountBitLength());
+        for (uint256 i = 0; i < expectedRouters.length; ++i) {
+            console.log("       allowedRouters[%s]=", i, expectedRouters[i]);
+            console.log("         legacyAbi=", expectedLegacyFlags[i]);
+        }
 
         // --- FlashLoanReceiver (constructor: swapExecutor, lendingPool) ---
         require(_isContract(flashLoanReceiver), "FlashLoanReceiver: no code");
@@ -63,16 +74,27 @@ contract Verify is Script {
         console.log("       swapExecutor=", flr.swapExecutor());
         console.log("       lendingPool=", flr.lendingPool());
 
-        // --- DelegatedExecutor (constructor: minAmountBitLength) ---
+        // --- DelegatedExecutor (constructor: RouterConfig[] initialRouters, minAmountBitLength) ---
         require(_isContract(delegatedExecutor), "DelegatedExecutor: no code");
         DelegatedExecutor de = DelegatedExecutor(payable(delegatedExecutor));
         require(de.owner() == ss.owner(), "DelegatedExecutor: owner mismatch");
         require(
             de.minAmountBitLength() == DeployRegistry.MIN_AMOUNT_BIT_LENGTH, "Delegated: minBits"
         );
+        for (uint256 i = 0; i < expectedRouters.length; ++i) {
+            require(de.allowedRouters(expectedRouters[i]), "DelegatedExecutor: expected router not allowlisted");
+            require(
+                de.routerIsLegacyAbi(expectedRouters[i]) == expectedLegacyFlags[i],
+                "DelegatedExecutor: router legacyAbi flag mismatch"
+            );
+        }
         console.log("[PASS] DelegatedExecutor wiring + constructor");
         console.log("       owner=", de.owner());
         console.log("       minAmountBitLength=", de.minAmountBitLength());
+        for (uint256 i = 0; i < expectedRouters.length; ++i) {
+            console.log("       allowedRouters[%s]=", i, expectedRouters[i]);
+            console.log("         legacyAbi=", expectedLegacyFlags[i]);
+        }
 
         // --- BEBE / batch executor ---
         require(_isContract(batchExecutor), "BATCH_EXECUTOR: no code");

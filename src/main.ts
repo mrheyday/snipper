@@ -312,7 +312,7 @@ class SniperBot {
       SNIPER_SEARCHER_ADDRESS,
       [
         'function owner() view returns (address)',
-        'function swapRouter() view returns (address)',
+        'function allowedRouters(address) view returns (bool)',
         'function allowedExecutors(address) view returns (bool)',
         'function minAmountBitLength() view returns (uint256)',
       ],
@@ -328,9 +328,8 @@ class SniperBot {
       provider
     );
 
-    const [sOwner, sRouter, flashAllowed, minBits, fOwner, fExec, fPool] = await Promise.all([
+    const [sOwner, flashAllowed, minBits, fOwner, fExec, fPool] = await Promise.all([
       sniper.owner() as Promise<string>,
-      sniper.swapRouter() as Promise<string>,
       sniper.allowedExecutors(FLASH_LOAN_RECEIVER_ADDRESS) as Promise<boolean>,
       sniper.minAmountBitLength() as Promise<bigint>,
       flash.owner() as Promise<string>,
@@ -338,10 +337,16 @@ class SniperBot {
       flash.lendingPool() as Promise<string>,
     ]);
 
-    if (sRouter.toLowerCase() !== SWAP_ROUTER_ADDRESS.toLowerCase()) {
-      throw new Error(
-        `SniperSearcher.swapRouter (${sRouter}) != SWAP_ROUTER_ADDRESS (${SWAP_ROUTER_ADDRESS})`
-      );
+    // Every execution venue's router must be allowlisted on-chain (mirrors Verify.s.sol).
+    // Replaces the old single immutable `swapRouter()` getter, removed when SniperSearcher
+    // moved to a per-router allowlist — reading it now would revert and abort boot.
+    for (const p of EXECUTION_VENUE_PROTOCOLS) {
+      const routerAllowed = (await sniper.allowedRouters(p.routerAddress)) as boolean;
+      if (!routerAllowed) {
+        throw new Error(
+          `SniperSearcher.allowedRouters(${p.name} ${p.routerAddress}) is false — run Configure/allowRouter`
+        );
+      }
     }
     if (!flashAllowed) {
       throw new Error(
@@ -369,7 +374,10 @@ class SniperBot {
       );
     }
     logger.info(`✓ Flash owner matches wallet; allowExecutor wired; pool=${fPool}`);
-    logger.info(`✓ SwapRouter: ${sRouter}`);
+    logger.info(
+      `✓ Allowlisted routers (${EXECUTION_VENUE_PROTOCOLS.length}): ` +
+        EXECUTION_VENUE_PROTOCOLS.map((p) => p.name).join(', ')
+    );
 
     const stats = await this.bridge.getExecutionStats();
     logger.info(`✓ Direct mode: ${stats.directReady ? 'ready' : 'not ready'}`);

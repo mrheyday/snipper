@@ -31,7 +31,7 @@ interface IPool {
 }
 
 interface ISwapExecutor {
-    function executeSwap(address tokenIn, uint256 amountIn, bytes calldata path, uint256 minAmountOut)
+    function executeSwap(address tokenIn, address router, uint256 amountIn, bytes calldata path, uint256 minAmountOut)
         external
         returns (uint256);
 }
@@ -48,10 +48,10 @@ error Reentrancy();
 /// @title FlashLoanReceiver
 /// @notice Aave V3 flashLoanSimple receiver for single-block arbitrage on Arbitrum.
 /// @dev Conforms to IFlashLoanSimpleReceiver. Flow (one tx / one block):
-///      1. owner (or type-4 delegated EOA owner) calls initiateFlashLoan
+///      1. owner (or type-4 delegated EOA owner) calls initiateFlashLoan(token, router, ...)
 ///      2. Pool transfers `amount` here, then calls executeOperation
-///      3. We approve SniperSearcher, swap (path MUST end in `asset` for repay),
-///         approve Pool for amount+premium; Pool pulls on return
+///      3. We approve SniperSearcher, swap via the caller-selected router (path MUST end in
+///         `asset` for repay), approve Pool for amount+premium; Pool pulls on return
 ///      4. Leftover `asset` is profit — withdraw promptly (griefing risk if parked)
 contract FlashLoanReceiver {
     address public owner;
@@ -102,14 +102,18 @@ contract FlashLoanReceiver {
 
     /// @notice Initiate flashLoanSimple with this contract as receiver (docs path 3).
     /// @param token Reserve asset to borrow (must have borrowing enabled)
+    /// @param router Uniswap-V3-style router SniperSearcher should swap against (must be
+    ///        on SniperSearcher's allowedRouters)
     /// @param amount Amount to borrow
     /// @param swapPath Uniswap V3 path; final token MUST equal `token` (round-trip)
     /// @param minAmountOut Minimum final amountOut of the borrow asset
-    function initiateFlashLoan(address token, uint256 amount, bytes calldata swapPath, uint256 minAmountOut)
-        external
-        onlyOwner
-        nonReentrant
-    {
+    function initiateFlashLoan(
+        address token,
+        address router,
+        uint256 amount,
+        bytes calldata swapPath,
+        uint256 minAmountOut
+    ) external onlyOwner nonReentrant {
         // Min 2 hops (66 bytes): token|fee|mid|fee|token — single hop cannot repay flash.
         if (swapPath.length < 66 || (swapPath.length - 20) % 23 != 0) revert InvalidSwapPath();
         address pathEnd = address(bytes20(swapPath[swapPath.length - 20:]));
@@ -120,7 +124,7 @@ contract FlashLoanReceiver {
         uint256 minRepay = amount + (amount * premiumBps) / 10_000;
         if (minAmountOut < minRepay) revert MinAmountOutTooLow(minAmountOut, minRepay);
 
-        bytes memory params = abi.encode(token, swapPath, minAmountOut);
+        bytes memory params = abi.encode(token, router, swapPath, minAmountOut);
         // receiverAddress = address(this): same-contract path from Aave docs
         IPool(lendingPool).flashLoanSimple(address(this), token, amount, params, 0);
     }
@@ -136,7 +140,8 @@ contract FlashLoanReceiver {
         // Only loans we initiated (prevents third-party griefing via forced callback)
         require(initiator == address(this), "Initiator mismatch");
 
-        (, bytes memory swapPath, uint256 minAmountOut) = abi.decode(params, (address, bytes, uint256));
+        (, address router, bytes memory swapPath, uint256 minAmountOut) =
+            abi.decode(params, (address, address, bytes, uint256));
 
         // Defense-in-depth: re-validate path in callback (not only at initiate).
         // swapPath is memory (from abi.decode) so slice via assembly, not calldata range.
@@ -153,7 +158,7 @@ contract FlashLoanReceiver {
 
         // Path must return the borrow asset (round-trip arb). Output is transferred
         // back to this contract by SniperSearcher (allowed-executor path).
-        ISwapExecutor(swapExecutor).executeSwap(asset, amount, swapPath, minAmountOut);
+        ISwapExecutor(swapExecutor).executeSwap(asset, router, amount, swapPath, minAmountOut);
 
         // Never leave a standing approval on the searcher between txs
         SafeTransferLib.safeApprove(asset, swapExecutor, 0);

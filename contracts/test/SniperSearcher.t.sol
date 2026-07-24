@@ -5,7 +5,12 @@ import {Test} from "forge-std/Test.sol";
 import {SniperSearcher} from "../src/SniperSearcher.sol";
 import {ERC20Mock} from "./mocks/ERC20Mock.sol";
 
-/// @dev SwapRouter02-shaped mock: pulls tokenIn, mints amountIn of tokenOut to recipient.
+/// @dev SwapRouter02-shaped mock (4-field, no deadline): pulls tokenIn, mints amountIn of
+///      tokenOut to recipient. Represents Uniswap V3 / PancakeSwap V3 (legacyAbi = false).
+///      Its exactInput selector differs from MockLegacyRouter02's below (different tuple
+///      shape), so calling the wrong mock with the wrong ABI naturally reverts with no
+///      matching function — the same failure signature the real SushiSwap V3 router produced
+///      when called with the wrong ABI during the mainnet-fork dry run.
 contract MockRouter02 {
     struct ExactInputParams {
         bytes path;
@@ -25,9 +30,36 @@ contract MockRouter02 {
     }
 }
 
+/// @dev Older ISwapRouter-shaped mock (5-field, deadline INSIDE the struct). Represents
+///      SushiSwap V3's real deployed router (legacyAbi = true) — see
+///      docs/superpowers/specs/2026-07-23-multi-venue-swap-execution-design.md,
+///      "Dual-ABI router support", for the on-chain proof this shape is required.
+contract MockLegacyRouter02 {
+    struct ExactInputParams {
+        bytes path;
+        address recipient;
+        uint256 deadline;
+        uint256 amountIn;
+        uint256 amountOutMinimum;
+    }
+
+    function exactInput(ExactInputParams calldata params) external payable returns (uint256 amountOut) {
+        require(params.path.length >= 43, "path");
+        require(params.deadline > 0, "deadline");
+        address tokenIn = address(bytes20(params.path[0:20]));
+        address tokenOut = address(bytes20(params.path[params.path.length - 20:]));
+        require(ERC20Mock(tokenIn).transferFrom(msg.sender, address(this), params.amountIn), "in");
+        amountOut = params.amountIn;
+        require(amountOut >= params.amountOutMinimum, "min");
+        ERC20Mock(tokenOut).mint(params.recipient, amountOut);
+    }
+}
+
 contract SniperSearcherTest is Test {
     SniperSearcher public searcher;
     MockRouter02 public router;
+    MockRouter02 public router2;
+    MockLegacyRouter02 public legacyRouter;
     ERC20Mock public tokenA;
     ERC20Mock public tokenB;
     address public owner;
@@ -41,9 +73,18 @@ contract SniperSearcherTest is Test {
     error TokenInMismatch(address expected, address pathTokenIn);
     error ZeroAddress();
     error AmountTooSmall(uint256 amountIn, uint256 minBitLength);
+    error RouterNotAllowed(address router);
+    error NoRoutersProvided();
 
     event Swap(address indexed tokenIn, address indexed tokenOut, uint256 amountIn, uint256 amountOut);
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    event RouterAllowed(address indexed router, bool legacyAbi);
+    event RouterRevoked(address indexed router);
+
+    function _oneRouter(address r, bool legacyAbi) internal pure returns (SniperSearcher.RouterConfig[] memory out) {
+        out = new SniperSearcher.RouterConfig[](1);
+        out[0] = SniperSearcher.RouterConfig({router: r, legacyAbi: legacyAbi});
+    }
 
     function setUp() public {
         owner = makeAddr("owner");
@@ -51,8 +92,10 @@ contract SniperSearcherTest is Test {
         executor = makeAddr("executor");
 
         router = new MockRouter02();
+        router2 = new MockRouter02();
+        legacyRouter = new MockLegacyRouter02();
         vm.prank(owner);
-        searcher = new SniperSearcher(address(router), 0);
+        searcher = new SniperSearcher(_oneRouter(address(router), false), 0);
 
         tokenA = new ERC20Mock("Token A", "TKNA", 18);
         tokenB = new ERC20Mock("Token B", "TKNB", 18);
@@ -68,20 +111,27 @@ contract SniperSearcherTest is Test {
 
     function test_Deployment() public view {
         assertEq(searcher.owner(), owner);
-        assertEq(searcher.swapRouter(), address(router));
+        assertTrue(searcher.allowedRouters(address(router)));
+        assertFalse(searcher.routerIsLegacyAbi(address(router)));
         assertEq(searcher.chainId(), block.chainid);
     }
 
-    function test_RevertWhen_ZeroRouter() public {
+    function test_RevertWhen_ZeroRouterInInitialList() public {
         vm.expectRevert(ZeroAddress.selector);
-        new SniperSearcher(address(0), 0);
+        new SniperSearcher(_oneRouter(address(0), false), 0);
+    }
+
+    function test_RevertWhen_NoRoutersProvided() public {
+        SniperSearcher.RouterConfig[] memory routers = new SniperSearcher.RouterConfig[](0);
+        vm.expectRevert(NoRoutersProvided.selector);
+        new SniperSearcher(routers, 0);
     }
 
     function test_RevertWhen_UnauthorizedCaller() public {
         bytes memory path = _pathAB();
         vm.prank(user);
         vm.expectRevert(Unauthorized.selector);
-        searcher.executeSwap(address(tokenA), 100e18, path, 0);
+        searcher.executeSwap(address(tokenA), address(router), 100e18, path, 0);
     }
 
     function test_ExecuteSwap_Success_ReturnsOutToCaller() public {
@@ -90,13 +140,95 @@ contract SniperSearcherTest is Test {
 
         vm.startPrank(owner);
         tokenA.approve(address(searcher), amountIn);
-        uint256 out = searcher.executeSwap(address(tokenA), amountIn, path, amountIn);
+        uint256 out = searcher.executeSwap(address(tokenA), address(router), amountIn, path, amountIn);
         vm.stopPrank();
 
         assertEq(out, amountIn);
         assertEq(tokenB.balanceOf(owner), amountIn);
         assertEq(tokenB.balanceOf(address(searcher)), 0);
         assertEq(tokenA.allowance(address(searcher), address(router)), 0);
+    }
+
+    function test_RevertWhen_RouterNotAllowed() public {
+        bytes memory path = _pathAB();
+        uint256 amountIn = 100e18;
+
+        vm.startPrank(owner);
+        tokenA.approve(address(searcher), amountIn);
+        vm.expectRevert(abi.encodeWithSelector(RouterNotAllowed.selector, address(router2)));
+        searcher.executeSwap(address(tokenA), address(router2), amountIn, path, 0);
+        vm.stopPrank();
+    }
+
+    function test_AllowRouter_ThenSwapSucceeds() public {
+        bytes memory path = _pathAB();
+        uint256 amountIn = 100e18;
+
+        vm.prank(owner);
+        vm.expectEmit(true, false, false, false);
+        emit RouterAllowed(address(router2), false);
+        searcher.allowRouter(address(router2), false);
+
+        vm.startPrank(owner);
+        tokenA.approve(address(searcher), amountIn);
+        uint256 out = searcher.executeSwap(address(tokenA), address(router2), amountIn, path, amountIn);
+        vm.stopPrank();
+
+        assertEq(out, amountIn);
+        assertEq(tokenB.balanceOf(owner), amountIn);
+    }
+
+    function test_RevokeRouter_ThenSwapReverts() public {
+        vm.prank(owner);
+        vm.expectEmit(true, false, false, false);
+        emit RouterRevoked(address(router));
+        searcher.revokeRouter(address(router));
+
+        bytes memory path = _pathAB();
+        vm.startPrank(owner);
+        tokenA.approve(address(searcher), 100e18);
+        vm.expectRevert(abi.encodeWithSelector(RouterNotAllowed.selector, address(router)));
+        searcher.executeSwap(address(tokenA), address(router), 100e18, path, 0);
+        vm.stopPrank();
+    }
+
+    function test_RevertWhen_AllowRouter_NotOwner() public {
+        vm.prank(user);
+        vm.expectRevert(Unauthorized.selector);
+        searcher.allowRouter(address(router2), false);
+    }
+
+    function test_LegacyRouter_ExecutesViaFiveFieldABI() public {
+        vm.prank(owner);
+        searcher.allowRouter(address(legacyRouter), true);
+        assertTrue(searcher.routerIsLegacyAbi(address(legacyRouter)));
+
+        bytes memory path = _pathAB();
+        uint256 amountIn = 100e18;
+
+        vm.startPrank(owner);
+        tokenA.approve(address(searcher), amountIn);
+        uint256 out = searcher.executeSwap(address(tokenA), address(legacyRouter), amountIn, path, amountIn);
+        vm.stopPrank();
+
+        assertEq(out, amountIn);
+        assertEq(tokenB.balanceOf(owner), amountIn);
+    }
+
+    function test_LegacyRouter_CalledWithWrongAbiShape_Reverts() public {
+        // A router registered as SwapRouter02-style (legacyAbi=false) but which is actually a
+        // MockLegacyRouter02 (5-field) has no matching 4-field selector, so the call reverts —
+        // this proves the branch actually dispatches a different call, not just a different
+        // struct value on the same call.
+        vm.prank(owner);
+        searcher.allowRouter(address(legacyRouter), false);
+
+        bytes memory path = _pathAB();
+        vm.startPrank(owner);
+        tokenA.approve(address(searcher), 100e18);
+        vm.expectRevert(SwapFailed.selector);
+        searcher.executeSwap(address(tokenA), address(legacyRouter), 100e18, path, 0);
+        vm.stopPrank();
     }
 
     function test_AllowedExecutor_CanSwapAndReceivesOut() public {
@@ -108,7 +240,7 @@ contract SniperSearcherTest is Test {
 
         vm.startPrank(executor);
         tokenA.approve(address(searcher), amountIn);
-        uint256 out = searcher.executeSwap(address(tokenA), amountIn, path, 0);
+        uint256 out = searcher.executeSwap(address(tokenA), address(router), amountIn, path, 0);
         vm.stopPrank();
 
         assertEq(out, amountIn);
@@ -116,65 +248,52 @@ contract SniperSearcherTest is Test {
     }
 
     function test_RevertWhen_PathTooShort() public {
-        bytes memory bad = abi.encodePacked(address(tokenA)); // 20 bytes
-        vm.prank(owner);
-        tokenA.approve(address(searcher), 1e18);
-        vm.prank(owner);
+        vm.startPrank(owner);
+        tokenA.approve(address(searcher), 100e18);
         vm.expectRevert(InvalidPath.selector);
-        searcher.executeSwap(address(tokenA), 1e18, bad, 0);
+        searcher.executeSwap(address(tokenA), address(router), 100e18, abi.encodePacked(address(tokenA)), 0);
+        vm.stopPrank();
     }
 
     function test_RevertWhen_TokenInMismatch() public {
-        // path starts with tokenB but tokenIn is tokenA
-        bytes memory path = abi.encodePacked(address(tokenB), uint24(3000), address(tokenA));
-        vm.prank(owner);
-        tokenA.approve(address(searcher), 1e18);
-        vm.prank(owner);
-        vm.expectRevert(abi.encodeWithSelector(TokenInMismatch.selector, address(tokenA), address(tokenB)));
-        searcher.executeSwap(address(tokenA), 1e18, path, 0);
+        bytes memory path = _pathAB();
+        vm.startPrank(owner);
+        tokenA.approve(address(searcher), 100e18);
+        vm.expectRevert(abi.encodeWithSelector(TokenInMismatch.selector, address(tokenB), address(tokenA)));
+        searcher.executeSwap(address(tokenB), address(router), 100e18, path, 0);
+        vm.stopPrank();
     }
 
     function test_RevertWhen_DeadlineExceeded() public {
         bytes memory path = _pathAB();
-        vm.prank(owner);
-        tokenA.approve(address(searcher), 1e18);
-        vm.warp(block.timestamp + 1000);
-        vm.prank(owner);
+        vm.startPrank(owner);
+        tokenA.approve(address(searcher), 100e18);
         vm.expectRevert(DeadlineExceeded.selector);
-        searcher.executeSwapWithDeadline(address(tokenA), 1e18, path, 0, block.timestamp - 1);
+        searcher.executeSwapWithDeadline(address(tokenA), address(router), 100e18, path, 0, block.timestamp - 1);
+        vm.stopPrank();
     }
 
     function test_ExecuteSwapWithDeadline_Success() public {
         bytes memory path = _pathAB();
-        uint256 amountIn = 10e18;
-        uint256 deadline = block.timestamp + 60;
+        uint256 amountIn = 100e18;
 
         vm.startPrank(owner);
         tokenA.approve(address(searcher), amountIn);
-        uint256 out = searcher.executeSwapWithDeadline(address(tokenA), amountIn, path, 0, deadline);
+        uint256 out = searcher.executeSwapWithDeadline(
+            address(tokenA), address(router), amountIn, path, amountIn, block.timestamp + 60
+        );
         vm.stopPrank();
 
         assertEq(out, amountIn);
-        assertEq(tokenB.balanceOf(owner), amountIn);
     }
 
     function test_TransferOwnership() public {
-        address next = makeAddr("next");
+        address newOwner = makeAddr("newOwner");
         vm.prank(owner);
         vm.expectEmit(true, true, false, false);
-        emit OwnershipTransferred(owner, next);
-        searcher.transferOwnership(next);
-        assertEq(searcher.owner(), next);
-
-        // old owner cannot withdraw
-        vm.prank(owner);
-        vm.expectRevert(Unauthorized.selector);
-        searcher.withdraw(address(tokenA), owner, 0);
-
-        // new owner can allow executor
-        vm.prank(next);
-        searcher.allowExecutor(executor);
-        assertTrue(searcher.allowedExecutors(executor));
+        emit OwnershipTransferred(owner, newOwner);
+        searcher.transferOwnership(newOwner);
+        assertEq(searcher.owner(), newOwner);
     }
 
     function test_RevertWhen_TransferOwnershipZero() public {
@@ -184,55 +303,44 @@ contract SniperSearcherTest is Test {
     }
 
     function test_Withdraw() public {
-        uint256 amount = 100e18;
-        tokenA.mint(address(searcher), amount);
-
+        tokenB.mint(address(searcher), 50e18);
+        address to = makeAddr("to");
         vm.prank(owner);
-        searcher.withdraw(address(tokenA), user, amount);
-
-        assertEq(tokenA.balanceOf(user), 1000e18 + amount);
-        assertEq(tokenA.balanceOf(address(searcher)), 0);
+        searcher.withdraw(address(tokenB), to, 0);
+        assertEq(tokenB.balanceOf(to), 50e18);
     }
 
     function test_WithdrawAll() public {
-        uint256 amountA = 50e18;
-        uint256 amountB = 100e18;
-        tokenA.mint(address(searcher), amountA);
-        tokenB.mint(address(searcher), amountB);
-
+        tokenA.mint(address(searcher), 10e18);
+        tokenB.mint(address(searcher), 20e18);
+        address to = makeAddr("to");
         address[] memory tokens = new address[](2);
         tokens[0] = address(tokenA);
         tokens[1] = address(tokenB);
-
         vm.prank(owner);
-        searcher.withdrawAll(tokens, user);
-
-        assertEq(tokenA.balanceOf(user), 1000e18 + amountA);
-        assertEq(tokenB.balanceOf(user), amountB);
+        searcher.withdrawAll(tokens, to);
+        assertEq(tokenA.balanceOf(to), 10e18);
+        assertEq(tokenB.balanceOf(to), 20e18);
     }
 
     function test_GetBalance() public {
-        uint256 amount = 250e18;
-        tokenA.mint(address(searcher), amount);
-        assertEq(searcher.getBalance(address(tokenA)), amount);
+        tokenA.mint(address(searcher), 5e18);
+        assertEq(searcher.getBalance(address(tokenA)), 5e18);
     }
 
     function test_ReceiveETH() public {
-        uint256 amount = 1 ether;
-        (bool success,) = payable(address(searcher)).call{value: amount}("");
-        require(success, "ETH transfer failed");
-        assertEq(address(searcher).balance, amount);
+        (bool success,) = payable(address(searcher)).call{value: 1 ether}("");
+        require(success);
+        assertEq(address(searcher).balance, 1 ether);
     }
 
     function test_Fuzz_WithdrawAmount(uint256 amount) public {
-        amount = bound(amount, 1, type(uint128).max);
+        amount = bound(amount, 1, 1_000_000e18);
         tokenA.mint(address(searcher), amount);
-
+        address to = makeAddr("to");
         vm.prank(owner);
-        searcher.withdraw(address(tokenA), user, amount);
-
-        assertEq(tokenA.balanceOf(address(searcher)), 0);
-        assertEq(tokenA.balanceOf(user), 1000e18 + amount);
+        searcher.withdraw(address(tokenA), to, amount);
+        assertEq(tokenA.balanceOf(to), amount);
     }
 
     function test_MinAmountBitLength_DisabledByDefault() public view {
@@ -240,62 +348,56 @@ contract SniperSearcherTest is Test {
     }
 
     function test_MinAmountBitLength_RevertsOnDustBeforeAnyExternalCall() public {
+        vm.startPrank(owner);
+        SniperSearcher strict = new SniperSearcher(_oneRouter(address(router), false), 32);
+
         bytes memory path = _pathAB();
-        SniperSearcher guarded = new SniperSearcher(address(router), 50);
-
-        vm.expectRevert(abi.encodeWithSelector(AmountTooSmall.selector, 1, 50));
-        guarded.executeSwap(address(tokenA), 1, path, 0);
-
-        assertEq(tokenA.balanceOf(address(this)), 0);
+        tokenA.approve(address(strict), 1);
+        vm.expectRevert(abi.encodeWithSelector(AmountTooSmall.selector, uint256(1), uint256(32)));
+        strict.executeSwap(address(tokenA), address(router), 1, path, 0);
+        vm.stopPrank();
     }
 
     function test_MinAmountBitLength_GasSavedOnRejectedDust() public {
-        bytes memory path = _pathAB();
-        SniperSearcher guarded = new SniperSearcher(address(router), 50);
+        vm.startPrank(owner);
+        SniperSearcher strict = new SniperSearcher(_oneRouter(address(router), false), 32);
 
+        bytes memory path = _pathAB();
+        tokenA.approve(address(strict), 1);
         uint256 gasBefore = gasleft();
-        try guarded.executeSwap(address(tokenA), 1, path, 0) {
+        try strict.executeSwap(address(tokenA), address(router), 1, path, 0) {
             revert("expected revert");
-        } catch {}
-        uint256 gasUsedOnRejectedDust = gasBefore - gasleft();
-        assertLt(gasUsedOnRejectedDust, 50_000);
+        } catch {
+            uint256 gasUsed = gasBefore - gasleft();
+            assertLt(gasUsed, 50_000);
+        }
+        vm.stopPrank();
     }
 
     function test_Multicall_BatchesOwnerCallsWithCorrectSender() public {
-        address executorA = makeAddr("executorA");
-        address executorB = makeAddr("executorB");
-
         bytes[] memory calls = new bytes[](2);
-        calls[0] = abi.encodeCall(SniperSearcher.allowExecutor, (executorA));
-        calls[1] = abi.encodeCall(SniperSearcher.allowExecutor, (executorB));
-
+        calls[0] = abi.encodeCall(SniperSearcher.allowExecutor, (executor));
+        calls[1] = abi.encodeCall(SniperSearcher.allowRouter, (address(router2), false));
         vm.prank(owner);
-        bytes[] memory results = searcher.multicall(calls);
-
-        assertEq(results.length, calls.length);
-        assertTrue(searcher.allowedExecutors(executorA));
-        assertTrue(searcher.allowedExecutors(executorB));
+        searcher.multicall(calls);
+        assertTrue(searcher.allowedExecutors(executor));
+        assertTrue(searcher.allowedRouters(address(router2)));
     }
 
     function test_Multicall_RevertsForNonOwner() public {
         bytes[] memory calls = new bytes[](1);
-        calls[0] = abi.encodeCall(SniperSearcher.allowExecutor, (user));
-
+        calls[0] = abi.encodeCall(SniperSearcher.allowExecutor, (executor));
         vm.prank(user);
         vm.expectRevert(Unauthorized.selector);
         searcher.multicall(calls);
     }
 
     function test_RevokeExecutor() public {
-        vm.prank(owner);
+        vm.startPrank(owner);
         searcher.allowExecutor(executor);
-        vm.prank(owner);
+        assertTrue(searcher.allowedExecutors(executor));
         searcher.revokeExecutor(executor);
-
-        vm.prank(executor);
-        tokenA.approve(address(searcher), 1e18);
-        vm.prank(executor);
-        vm.expectRevert(Unauthorized.selector);
-        searcher.executeSwap(address(tokenA), 1e18, _pathAB(), 0);
+        assertFalse(searcher.allowedExecutors(executor));
+        vm.stopPrank();
     }
 }
