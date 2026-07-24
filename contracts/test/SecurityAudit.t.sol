@@ -31,8 +31,8 @@ contract AuditTest is Test {
         routers[0] = SniperSearcher.RouterConfig({router: address(this), legacyAbi: false});
         searcher = new SniperSearcher(routers, 0);
         flashReceiver = new FlashLoanReceiver(address(searcher), address(this));
-        address[] memory routers2 = new address[](1);
-        routers2[0] = address(this);
+        DelegatedExecutor.RouterConfig[] memory routers2 = new DelegatedExecutor.RouterConfig[](1);
+        routers2[0] = DelegatedExecutor.RouterConfig({router: address(this), legacyAbi: false});
         executor = new DelegatedExecutor(routers2, 0);
 
         // Deploy mock tokens

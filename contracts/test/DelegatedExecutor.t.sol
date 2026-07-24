@@ -5,7 +5,8 @@ import {Test, console} from "forge-std/Test.sol";
 import {DelegatedExecutor} from "../src/DelegatedExecutor.sol";
 import {ERC20Mock} from "./mocks/ERC20Mock.sol";
 
-/// @dev SwapRouter02-shaped mock: pulls tokenIn, mints amountIn of tokenOut to recipient.
+/// @dev SwapRouter02-shaped mock (4-field, no deadline): pulls tokenIn, mints amountIn of
+///      tokenOut to recipient. Represents Uniswap V3 / PancakeSwap V3 (legacyAbi = false).
 contract MockRouter02 {
     struct ExactInputParams {
         bytes path;
@@ -25,10 +26,34 @@ contract MockRouter02 {
     }
 }
 
+/// @dev Older ISwapRouter-shaped mock (5-field, deadline INSIDE the struct). Represents
+///      SushiSwap V3's real deployed router (legacyAbi = true).
+contract MockLegacyRouter02 {
+    struct ExactInputParams {
+        bytes path;
+        address recipient;
+        uint256 deadline;
+        uint256 amountIn;
+        uint256 amountOutMinimum;
+    }
+
+    function exactInput(ExactInputParams calldata params) external payable returns (uint256 amountOut) {
+        require(params.path.length >= 43, "path");
+        require(params.deadline > 0, "deadline");
+        address tokenIn = address(bytes20(params.path[0:20]));
+        address tokenOut = address(bytes20(params.path[params.path.length - 20:]));
+        require(ERC20Mock(tokenIn).transferFrom(msg.sender, address(this), params.amountIn), "in");
+        amountOut = params.amountIn;
+        require(amountOut >= params.amountOutMinimum, "min");
+        ERC20Mock(tokenOut).mint(params.recipient, amountOut);
+    }
+}
+
 contract DelegatedExecutorTest is Test {
     DelegatedExecutor public executor;
     MockRouter02 public router;
     MockRouter02 public router2;
+    MockLegacyRouter02 public legacyRouter;
     ERC20Mock public tokenA;
     ERC20Mock public tokenB;
     address public user;
@@ -42,15 +67,23 @@ contract DelegatedExecutorTest is Test {
     error ZeroAddress();
 
     event Swap(address indexed tokenIn, address indexed tokenOut, uint256 amountIn, uint256 amountOut);
-    event RouterAllowed(address indexed router);
+    event RouterAllowed(address indexed router, bool legacyAbi);
     event RouterRevoked(address indexed router);
+
+    function _oneRouter(address r, bool legacyAbi)
+        internal
+        pure
+        returns (DelegatedExecutor.RouterConfig[] memory out)
+    {
+        out = new DelegatedExecutor.RouterConfig[](1);
+        out[0] = DelegatedExecutor.RouterConfig({router: r, legacyAbi: legacyAbi});
+    }
 
     function setUp() public {
         router = new MockRouter02();
         router2 = new MockRouter02();
-        address[] memory routers = new address[](1);
-        routers[0] = address(router);
-        executor = new DelegatedExecutor(routers, 0);
+        legacyRouter = new MockLegacyRouter02();
+        executor = new DelegatedExecutor(_oneRouter(address(router), false), 0);
         tokenA = new ERC20Mock("Token A", "TKNA", 18);
         tokenB = new ERC20Mock("Token B", "TKNB", 6);
 
@@ -60,7 +93,7 @@ contract DelegatedExecutorTest is Test {
     }
 
     function test_RevertWhen_NoRoutersProvided() public {
-        address[] memory routers = new address[](0);
+        DelegatedExecutor.RouterConfig[] memory routers = new DelegatedExecutor.RouterConfig[](0);
         vm.expectRevert(NoRoutersProvided.selector);
         new DelegatedExecutor(routers, 0);
     }
@@ -96,8 +129,8 @@ contract DelegatedExecutorTest is Test {
 
     function test_AllowRouter_ThenSwapSucceeds() public {
         vm.expectEmit(true, false, false, false);
-        emit RouterAllowed(address(router2));
-        executor.allowRouter(address(router2));
+        emit RouterAllowed(address(router2), false);
+        executor.allowRouter(address(router2), false);
 
         uint256 amountIn = 100e18;
         bytes memory path = abi.encodePacked(address(tokenA), uint24(3000), address(tokenB));
@@ -124,6 +157,37 @@ contract DelegatedExecutorTest is Test {
         tokenA.approve(address(executor), amountIn);
         vm.expectRevert(abi.encodeWithSelector(RouterNotAllowed.selector, address(router)));
         executor.executeSwap(address(tokenA), address(router), amountIn, path, 0, block.timestamp + 300);
+        vm.stopPrank();
+    }
+
+    function test_LegacyRouter_ExecutesViaFiveFieldABI() public {
+        executor.allowRouter(address(legacyRouter), true);
+        assertTrue(executor.routerIsLegacyAbi(address(legacyRouter)));
+
+        uint256 amountIn = 100e18;
+        bytes memory path = abi.encodePacked(address(tokenA), uint24(3000), address(tokenB));
+        executor.allowEOA(user);
+
+        vm.startPrank(user);
+        tokenA.approve(address(executor), amountIn);
+        uint256 amountOut = executor.executeSwap(address(tokenA), address(legacyRouter), amountIn, path, 0, block.timestamp + 300);
+        vm.stopPrank();
+
+        assertEq(amountOut, amountIn);
+        assertEq(tokenB.balanceOf(user), amountIn);
+    }
+
+    function test_LegacyRouter_CalledWithWrongAbiShape_Reverts() public {
+        executor.allowRouter(address(legacyRouter), false);
+
+        uint256 amountIn = 100e18;
+        bytes memory path = abi.encodePacked(address(tokenA), uint24(3000), address(tokenB));
+        executor.allowEOA(user);
+
+        vm.startPrank(user);
+        tokenA.approve(address(executor), amountIn);
+        vm.expectRevert(SwapFailed.selector);
+        executor.executeSwap(address(tokenA), address(legacyRouter), amountIn, path, 0, block.timestamp + 300);
         vm.stopPrank();
     }
 

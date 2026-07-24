@@ -12,11 +12,26 @@ interface IERC20Like {
 
 /// @dev Uniswap-V3-style SwapRouter02 exactInput — struct form, NO per-call deadline.
 ///      Selector: exactInput((bytes,address,uint256,uint256)) = 0xb858183f
-///      Deadlines are enforced in this contract (see DeadlineExceeded checks).
+///      Used by routers registered with legacyAbi = false (Uniswap V3, PancakeSwap V3).
 interface IUniswapV3Router02 {
     struct ExactInputParams {
         bytes path;
         address recipient;
+        uint256 amountIn;
+        uint256 amountOutMinimum;
+    }
+
+    function exactInput(ExactInputParams calldata params) external payable returns (uint256 amountOut);
+}
+
+/// @dev Older-generation Uniswap V3 periphery ISwapRouter exactInput — deadline INSIDE the
+///      struct. Used by routers registered with legacyAbi = true (SushiSwap V3's real deployed
+///      router on Arbitrum uses this shape — confirmed via mainnet-fork dry run 2026-07-24).
+interface ILegacySwapRouter {
+    struct ExactInputParams {
+        bytes path;
+        address recipient;
+        uint256 deadline;
         uint256 amountIn;
         uint256 amountOutMinimum;
     }
@@ -37,14 +52,25 @@ error NoRoutersProvided();
 
 /// @title DelegatedExecutor
 /// @notice Contract for EIP-7702 EOA delegation
-/// @dev Allows EOA to execute swaps without pre-deployment via account code delegation
+/// @dev Allows EOA to execute swaps without pre-deployment via account code delegation.
+///      Supports two Uniswap-V3-family router ABI shapes per allowlisted router (see
+///      SniperSearcher.sol's identical treatment for why).
 contract DelegatedExecutor is Multicallable {
     // Reentrancy guard using transient storage (0.8.28+)
     bytes32 private transient locked;
 
+    /// @param router Router contract address.
+    /// @param legacyAbi True = older ISwapRouter (5-field ExactInputParams, deadline inside).
+    ///        False = SwapRouter02-style (4-field, no deadline field).
+    struct RouterConfig {
+        address router;
+        bool legacyAbi;
+    }
+
     // Access control: mapping of allowed EOAs
     mapping(address eoa => bool allowed) public allowedEOAs;
     mapping(address router => bool allowed) public allowedRouters;
+    mapping(address router => bool legacy) public routerIsLegacyAbi;
     address public owner;
 
     /// @notice Minimum bit-length (via the native CLZ opcode) an `amountIn` must have to
@@ -56,7 +82,7 @@ contract DelegatedExecutor is Multicallable {
     event Delegated(address indexed eoa, bytes32 nonce);
     event EOAAllowed(address indexed eoa);
     event EOARevoked(address indexed eoa);
-    event RouterAllowed(address indexed router);
+    event RouterAllowed(address indexed router, bool legacyAbi);
     event RouterRevoked(address indexed router);
 
     // Reentrancy guard modifier using transient storage
@@ -102,14 +128,16 @@ contract DelegatedExecutor is Multicallable {
         _;
     }
 
-    constructor(address[] memory initialRouters, uint256 _minAmountBitLength) {
+    constructor(RouterConfig[] memory initialRouters, uint256 _minAmountBitLength) {
         if (initialRouters.length == 0) revert NoRoutersProvided();
         owner = msg.sender;
         allowedEOAs[msg.sender] = true;
         for (uint256 i = 0; i < initialRouters.length; ++i) {
-            if (initialRouters[i] == address(0)) revert ZeroAddress();
-            allowedRouters[initialRouters[i]] = true;
-            emit RouterAllowed(initialRouters[i]);
+            address r = initialRouters[i].router;
+            if (r == address(0)) revert ZeroAddress();
+            allowedRouters[r] = true;
+            routerIsLegacyAbi[r] = initialRouters[i].legacyAbi;
+            emit RouterAllowed(r, initialRouters[i].legacyAbi);
         }
         minAmountBitLength = _minAmountBitLength;
     }
@@ -128,10 +156,11 @@ contract DelegatedExecutor is Multicallable {
     }
 
     /// @notice Allow a router to be used as the swap venue
-    function allowRouter(address router) external onlyOwner {
+    function allowRouter(address router, bool legacyAbi) external onlyOwner {
         if (router == address(0)) revert ZeroAddress();
         allowedRouters[router] = true;
-        emit RouterAllowed(router);
+        routerIsLegacyAbi[router] = legacyAbi;
+        emit RouterAllowed(router, legacyAbi);
     }
 
     /// @notice Revoke a router
@@ -140,10 +169,48 @@ contract DelegatedExecutor is Multicallable {
         emit RouterRevoked(router);
     }
 
+    /// @dev Dispatch exactInput to the right ABI shape for `router`, both wrapped identically.
+    function _exactInput(
+        address router,
+        bytes calldata path,
+        uint256 amountIn,
+        uint256 minAmountOut,
+        uint256 deadline
+    ) internal returns (uint256 amountOut) {
+        if (routerIsLegacyAbi[router]) {
+            try ILegacySwapRouter(router).exactInput(
+                ILegacySwapRouter.ExactInputParams({
+                    path: path,
+                    recipient: _recipient(),
+                    deadline: deadline,
+                    amountIn: amountIn,
+                    amountOutMinimum: minAmountOut
+                })
+            ) returns (uint256 out) {
+                amountOut = out;
+            } catch {
+                revert SwapFailed();
+            }
+        } else {
+            try IUniswapV3Router02(router).exactInput(
+                IUniswapV3Router02.ExactInputParams({
+                    path: path,
+                    recipient: _recipient(),
+                    amountIn: amountIn,
+                    amountOutMinimum: minAmountOut
+                })
+            ) returns (uint256 out) {
+                amountOut = out;
+            } catch {
+                revert SwapFailed();
+            }
+        }
+    }
+
     /// @notice Execute swap via EIP-7702 delegation
     /// @dev Called when EOA code points to this contract (via SetCode tx)
     /// @param tokenIn Input token
-    /// @param router Allowlisted Uniswap-V3-style router to swap against
+    /// @param router Allowlisted router to swap against
     /// @param amountIn Input amount
     /// @param path Encoded swap path
     /// @param minAmountOut Minimum output
@@ -167,19 +234,7 @@ contract DelegatedExecutor is Multicallable {
 
         SafeTransferLib.safeApproveWithRetry(tokenIn, router, amountIn);
 
-        // SwapRouter02 struct exactInput (0xb858183f) — recipient is this account under 7702.
-        try IUniswapV3Router02(router).exactInput(
-            IUniswapV3Router02.ExactInputParams({
-                path: path,
-                recipient: _recipient(),
-                amountIn: amountIn,
-                amountOutMinimum: minAmountOut
-            })
-        ) returns (uint256 out) {
-            amountOut = out;
-        } catch {
-            revert SwapFailed();
-        }
+        amountOut = _exactInput(router, path, amountIn, minAmountOut, deadline);
 
         SafeTransferLib.safeApprove(tokenIn, router, 0);
 
@@ -214,18 +269,7 @@ contract DelegatedExecutor is Multicallable {
         _pullIn(tokenIn, amountIn);
         SafeTransferLib.safeApproveWithRetry(tokenIn, router, amountIn);
 
-        try IUniswapV3Router02(router).exactInput(
-            IUniswapV3Router02.ExactInputParams({
-                path: path,
-                recipient: _recipient(),
-                amountIn: amountIn,
-                amountOutMinimum: minAmountOut
-            })
-        ) returns (uint256 out) {
-            amountOut = out;
-        } catch {
-            revert SwapFailed();
-        }
+        amountOut = _exactInput(router, path, amountIn, minAmountOut, deadline);
 
         SafeTransferLib.safeApprove(tokenIn, router, 0);
 
@@ -266,18 +310,7 @@ contract DelegatedExecutor is Multicallable {
             _pullIn(swap.tokenIn, swap.amountIn);
             SafeTransferLib.safeApproveWithRetry(swap.tokenIn, router, swap.amountIn);
 
-            try IUniswapV3Router02(router).exactInput(
-                IUniswapV3Router02.ExactInputParams({
-                    path: swap.path,
-                    recipient: _recipient(),
-                    amountIn: swap.amountIn,
-                    amountOutMinimum: swap.minAmountOut
-                })
-            ) returns (uint256 out) {
-                amountsOut[i] = out;
-            } catch {
-                revert SwapFailed();
-            }
+            amountsOut[i] = _exactInput(router, swap.path, swap.amountIn, swap.minAmountOut, deadline);
 
             SafeTransferLib.safeApprove(swap.tokenIn, router, 0);
 
