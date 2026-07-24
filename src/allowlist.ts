@@ -9,10 +9,15 @@ import { Logger } from './logger';
 
 const logger = new Logger('Allowlist');
 
-/** Uniswap V3 SwapRouter02 — only execution venue wired into SniperSearcher. */
+/** Execution venues wired into SniperSearcher's router allowlist: Uniswap V3, SushiSwap V3,
+ *  PancakeSwap V3. Kept as a literal list (not imported from dexAggregator.ts) so this file
+ *  has no import-order dependency on it; addresses must stay in sync with
+ *  dexAggregator.ts's ARBITRUM_DEX_PROTOCOLS and DeployRegistry.sol's sniperInitialRouters(). */
 export const ALLOWED_ROUTERS_DEFAULT = [
   ARBITRUM_DEPLOY.swapRouter02,
-  '0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45',
+  '0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45', // Uniswap V3
+  '0x8A21F6768C1f8075791D08546Dadf6daA0bE820c', // SushiSwap V3
+  '0x32226588378236Fd0c7c4053999F88aC0e5cAc77', // PancakeSwap V3
 ] as const;
 
 /**
